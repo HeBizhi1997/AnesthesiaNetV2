@@ -1,0 +1,27 @@
+Model parameters: 5,452,641
+torch.compile disabled (Triton not supported on Windows)
+Patient split — train: 1313, val: 262, test: 174
+Loading dataset into RAM (cache_in_memory=True)…
+  train sequences: 7,768, val: 9,000, test: 5,604
+Patient split — train: 1313, val: 262, test: 174
+Loading dataset into RAM (cache_in_memory=True)…
+  train sequences: 13,982,339, val: 2,904,079, test: 1,827,114
+Val dataset rebuilt with seq_len=10 for speed
+DataLoader workers: 0 (cache in RAM)
+AMP enabled: torch.bfloat16
+
+Training on cuda  |  AMP=True (torch.bfloat16)
+Epochs=200  patience=20  lr=3.00e-04  batch=32
+steps/epoch=243 / 243 total  (100.0% coverage per epoch, full dataset seen every ~1 epochs)
+ Epoch   trainLoss    baseLoss    monoLoss     valLoss    valMAE         LR      sps     time
+----------------------------------------------------------------------------------------------------
+     1      0.0101      0.0101      0.0000      0.0089     11.67   3.00e-04      137    56.7s  *
+           -> checkpoint saved  val_MAE=11.67 BIS
+     2      0.0086      0.0086      0.0000      0.0070      9.57   3.00e-04      141    55.1s  *
+           -> checkpoint saved  val_MAE=9.57 BIS
+     3      0.0079      0.0079      0.0000      0.0071      9.80   3.00e-04      141    55.0s   
+     4      0.0073      0.0073      0.0000      0.0066      9.07   3.00e-04      141    55.1s  *
+           -> checkpoint saved  val_MAE=9.07 BIS
+     5      0.0073      0.0073      0.0000      0.0069      9.63   3.00e-04      140    55.5s   
+     6      0.0069      0.0069      0.0000      0.0063      8.49   2.99e-04      140    55.3s  *
+           -> checkpoint saved  val_MAE=8.49 BIS

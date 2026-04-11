@@ -1,0 +1,200 @@
+[2026-04-11 01:33:49][MODEL] Model: AnesthesiaNetV2  parameters: 545,548  config=configs/pipeline_v8.yaml
+torch.compile disabled (Triton not supported on Windows)
+Case filter (BIS std p10-p90, 7.8-16.7): kept 1399/1749 (removed 350)
+Patient split ¡ª train: 1051, val: 209, test: 139
+Loading dataset into RAM (cache_in_memory=True)¡­
+Induction boost x15: added 18,255 sequences (total 86,021)
+  train sequences: 86,021, val: 14,303, test: 8,847
+DataLoader workers: 0 (cache in RAM)
+AMP enabled: torch.bfloat16
+
+==============================================================================================================
+[2026-04-11 01:37:12][START] AnesthesiaNetV2 Training Start
+[2026-04-11 01:37:12][CONFIG] device=cuda  AMP=True(torch.bfloat16)
+[2026-04-11 01:37:12][CONFIG] params=545,548  epochs=200  patience=40  lr=1.00e-04  batch=32
+[2026-04-11 01:37:12][CONFIG] steps/epoch=2,689  train_seqs=86,021  val_seqs=14,303
+==============================================================================================================
+Timestamp              Ep   TotLoss      BIS    Phase     Stim     Mono    vMAE    vInd    vRec   PhAcc   StAUC         LR     SPS  train_t  val_t  flag
+--------------------------------------------------------------------------------------------------------------------------------------------------------
+[2026-04-11 01:37:12][EPOCH] Epoch 1/200 train start  (elapsed=0:00:00)
+[2026-04-11 01:54:36][TRAIN] Epoch 1 train done  1044s  loss=0.3341  bis=0.0059  phase=0.6287  stim=0.0459  mono=0.0000  sps=110725
+[2026-04-11 01:54:36][EPOCH] Epoch 1/200 val start
+2026-04-11 01:55:07     1    0.3341   0.0059   0.6287   0.0459   0.0000    7.25   17.81   32.01   96.2%   0.518   1.00e-04  110725    1044s    31s  *** BEST
+[2026-04-11 01:55:07][VAL] Epoch 1 val done  31s  vMAE=7.25  vInd=17.81  vRec=32.01  PhAcc=96.2%  StAUC=0.518  total_elapsed=0:17:55  eta=59:26:34
+[2026-04-11 01:55:07][CKPT] Checkpoint saved  epoch=1  val_MAE=7.25 BIS  path=outputs\checkpoints\v8\best_model_v2.pt
+[2026-04-11 01:55:07][EPOCH] Epoch 2/200 train start  (elapsed=0:17:55)
+[2026-04-11 02:12:30][TRAIN] Epoch 2 train done  1043s  loss=0.2304  bis=0.0040  phase=0.4258  stim=0.0450  mono=0.0001  sps=111034
+[2026-04-11 02:12:30][EPOCH] Epoch 2/200 val start
+2026-04-11 02:13:02     2    0.2304   0.0040   0.4258   0.0450   0.0001    7.38   14.99   24.92   92.9%   0.520   1.00e-04  111034    1043s    31s  
+[2026-04-11 02:13:02][VAL] Epoch 2 val done  31s  vMAE=7.38  vInd=14.99  vRec=24.92  PhAcc=92.9%  StAUC=0.520  total_elapsed=0:35:49  eta=59:06:59
+[2026-04-11 02:13:02][EPOCH] Epoch 3/200 train start  (elapsed=0:35:49)
+[2026-04-11 02:30:22][TRAIN] Epoch 3 train done  1040s  loss=0.1964  bis=0.0035  phase=0.3589  stim=0.0447  mono=0.0001  sps=111143
+[2026-04-11 02:30:22][EPOCH] Epoch 3/200 val start
+2026-04-11 02:30:53     3    0.1964   0.0035   0.3589   0.0447   0.0001    7.50   12.88   21.45   96.7%   0.526   9.99e-05  111143    1040s    31s  
+[2026-04-11 02:30:53][VAL] Epoch 3 val done  31s  vMAE=7.50  vInd=12.88  vRec=21.45  PhAcc=96.7%  StAUC=0.526  total_elapsed=0:53:41  eta=58:45:21
+[2026-04-11 02:30:53][EPOCH] Epoch 4/200 train start  (elapsed=0:53:41)
+[2026-04-11 02:48:14][TRAIN] Epoch 4 train done  1041s  loss=0.1761  bis=0.0033  phase=0.3187  stim=0.0446  mono=0.0001  sps=110839
+[2026-04-11 02:48:14][EPOCH] Epoch 4/200 val start
+2026-04-11 02:48:45     4    0.1761   0.0033   0.3187   0.0446   0.0001    7.09   10.61   19.38   95.5%   0.533   9.99e-05  110839    1041s    31s  *** BEST
+[2026-04-11 02:48:45][VAL] Epoch 4 val done  31s  vMAE=7.09  vInd=10.61  vRec=19.38  PhAcc=95.5%  StAUC=0.533  total_elapsed=1:11:33  eta=58:26:03
+[2026-04-11 02:48:45][CKPT] Checkpoint saved  epoch=4  val_MAE=7.09 BIS  path=outputs\checkpoints\v8\best_model_v2.pt
+[2026-04-11 02:48:45][EPOCH] Epoch 5/200 train start  (elapsed=1:11:33)
+[2026-04-11 03:06:06][TRAIN] Epoch 5 train done  1041s  loss=0.1585  bis=0.0032  phase=0.2839  stim=0.0445  mono=0.0001  sps=110696
+[2026-04-11 03:06:06][EPOCH] Epoch 5/200 val start
+2026-04-11 03:06:37     5    0.1585   0.0032   0.2839   0.0445   0.0001    7.41   18.92   24.26   97.7%   0.531   9.98e-05  110696    1041s    31s  
+[2026-04-11 03:06:37][VAL] Epoch 5 val done  31s  vMAE=7.41  vInd=18.92  vRec=24.26  PhAcc=97.7%  StAUC=0.531  total_elapsed=1:29:25  eta=58:07:39
+[2026-04-11 03:06:37][EPOCH] Epoch 6/200 train start  (elapsed=1:29:25)
+[2026-04-11 03:23:57][TRAIN] Epoch 6 train done  1040s  loss=0.1447  bis=0.0031  phase=0.2566  stim=0.0444  mono=0.0001  sps=111074
+[2026-04-11 03:23:57][EPOCH] Epoch 6/200 val start
+2026-04-11 03:24:27     6    0.1447   0.0031   0.2566   0.0444   0.0001    7.16   13.85   19.84   96.9%   0.535   9.98e-05  111074    1040s    30s  
+[2026-04-11 03:24:27][VAL] Epoch 6 val done  30s  vMAE=7.16  vInd=13.85  vRec=19.84  PhAcc=96.9%  StAUC=0.535  total_elapsed=1:47:15  eta=57:48:01
+[2026-04-11 03:24:27][EPOCH] Epoch 7/200 train start  (elapsed=1:47:15)
+[2026-04-11 03:41:45][TRAIN] Epoch 7 train done  1038s  loss=0.1326  bis=0.0030  phase=0.2326  stim=0.0444  mono=0.0001  sps=111208
+[2026-04-11 03:41:45][EPOCH] Epoch 7/200 val start
+2026-04-11 03:42:15     7    0.1326   0.0030   0.2326   0.0444   0.0001    7.03   17.01   19.51   97.7%   0.537   9.97e-05  111208    1038s    30s  *** BEST
+[2026-04-11 03:42:15][VAL] Epoch 7 val done  30s  vMAE=7.03  vInd=17.01  vRec=19.51  PhAcc=97.7%  StAUC=0.537  total_elapsed=2:05:03  eta=57:28:03
+[2026-04-11 03:42:15][CKPT] Checkpoint saved  epoch=7  val_MAE=7.03 BIS  path=outputs\checkpoints\v8\best_model_v2.pt
+[2026-04-11 03:42:15][EPOCH] Epoch 8/200 train start  (elapsed=2:05:03)
+[2026-04-11 03:59:34][TRAIN] Epoch 8 train done  1038s  loss=0.1214  bis=0.0029  phase=0.2103  stim=0.0444  mono=0.0001  sps=111061
+[2026-04-11 03:59:34][EPOCH] Epoch 8/200 val start
+2026-04-11 04:00:05     8    0.1214   0.0029   0.2103   0.0444   0.0001    7.17   14.20   21.79   97.6%   0.538   9.96e-05  111061    1038s    31s  
+[2026-04-11 04:00:05][VAL] Epoch 8 val done  31s  vMAE=7.17  vInd=14.20  vRec=21.79  PhAcc=97.6%  StAUC=0.538  total_elapsed=2:22:52  eta=57:09:08
+[2026-04-11 04:00:05][EPOCH] Epoch 9/200 train start  (elapsed=2:22:52)
+[2026-04-11 04:17:27][TRAIN] Epoch 9 train done  1043s  loss=0.1101  bis=0.0028  phase=0.1880  stim=0.0443  mono=0.0001  sps=111111
+[2026-04-11 04:17:27][EPOCH] Epoch 9/200 val start
+2026-04-11 04:17:58     9    0.1101   0.0028   0.1880   0.0443   0.0001    6.27   14.33   14.30   97.5%   0.546   9.95e-05  111111    1043s    31s  *** BEST
+[2026-04-11 04:17:58][VAL] Epoch 9 val done  31s  vMAE=6.27  vInd=14.33  vRec=14.30  PhAcc=97.5%  StAUC=0.546  total_elapsed=2:40:46  eta=56:51:53
+[2026-04-11 04:17:58][CKPT] Checkpoint saved  epoch=9  val_MAE=6.27 BIS  path=outputs\checkpoints\v8\best_model_v2.pt
+[2026-04-11 04:17:58][EPOCH] Epoch 10/200 train start  (elapsed=2:40:46)
+[2026-04-11 04:35:19][TRAIN] Epoch 10 train done  1041s  loss=0.1061  bis=0.0028  phase=0.1800  stim=0.0443  mono=0.0001  sps=111044
+[2026-04-11 04:35:19][EPOCH] Epoch 10/200 val start
+2026-04-11 04:35:49    10    0.1061   0.0028   0.1800   0.0443   0.0001    6.83   17.12   19.25   97.5%   0.540   9.94e-05  111044    1041s    31s  
+[2026-04-11 04:35:49][VAL] Epoch 10 val done  31s  vMAE=6.83  vInd=17.12  vRec=19.25  PhAcc=97.5%  StAUC=0.540  total_elapsed=2:58:37  eta=56:33:51
+[2026-04-11 04:35:49][EPOCH] Epoch 11/200 train start  (elapsed=2:58:37)
+[2026-04-11 04:53:10][TRAIN] Epoch 11 train done  1041s  loss=0.0988  bis=0.0027  phase=0.1655  stim=0.0443  mono=0.0001  sps=110909
+[2026-04-11 04:53:10][EPOCH] Epoch 11/200 val start
+2026-04-11 04:53:41    11    0.0988   0.0027   0.1655   0.0443   0.0001    6.82   15.53   17.03   97.3%   0.532   9.93e-05  110909    1041s    31s  
+[2026-04-11 04:53:41][VAL] Epoch 11 val done  31s  vMAE=6.82  vInd=15.53  vRec=17.03  PhAcc=97.3%  StAUC=0.532  total_elapsed=3:16:28  eta=56:15:52
+[2026-04-11 04:53:41][EPOCH] Epoch 12/200 train start  (elapsed=3:16:28)
+[2026-04-11 05:11:01][TRAIN] Epoch 12 train done  1040s  loss=0.0902  bis=0.0027  phase=0.1486  stim=0.0442  mono=0.0001  sps=111069
+[2026-04-11 05:11:01][EPOCH] Epoch 12/200 val start
+2026-04-11 05:11:31    12    0.0902   0.0027   0.1486   0.0442   0.0001    7.00   16.49   17.22   97.9%   0.541   9.91e-05  111069    1040s    31s  
+[2026-04-11 05:11:31][VAL] Epoch 12 val done  31s  vMAE=7.00  vInd=16.49  vRec=17.22  PhAcc=97.9%  StAUC=0.541  total_elapsed=3:34:19  eta=55:57:44
+[2026-04-11 05:11:31][EPOCH] Epoch 13/200 train start  (elapsed=3:34:19)
+[2026-04-11 05:28:52][TRAIN] Epoch 13 train done  1040s  loss=0.0864  bis=0.0027  phase=0.1410  stim=0.0442  mono=0.0001  sps=110944
+[2026-04-11 05:28:52][EPOCH] Epoch 13/200 val start
+2026-04-11 05:29:22    13    0.0864   0.0027   0.1410   0.0442   0.0001    6.61   17.28   16.90   97.7%   0.542   9.90e-05  110944    1040s    30s  
+[2026-04-11 05:29:22][VAL] Epoch 13 val done  30s  vMAE=6.61  vInd=17.28  vRec=16.90  PhAcc=97.7%  StAUC=0.542  total_elapsed=3:52:10  eta=55:39:42
+[2026-04-11 05:29:22][EPOCH] Epoch 14/200 train start  (elapsed=3:52:10)
+[2026-04-11 05:46:42][TRAIN] Epoch 14 train done  1040s  loss=0.0829  bis=0.0026  phase=0.1341  stim=0.0441  mono=0.0001  sps=111016
+[2026-04-11 05:46:42][EPOCH] Epoch 14/200 val start
+2026-04-11 05:47:12    14    0.0829   0.0026   0.1341   0.0441   0.0001    6.76   17.85   16.51   97.8%   0.542   9.88e-05  111016    1040s    30s  
+[2026-04-11 05:47:12][VAL] Epoch 14 val done  30s  vMAE=6.76  vInd=17.85  vRec=16.51  PhAcc=97.8%  StAUC=0.542  total_elapsed=4:10:00  eta=55:21:31
+[2026-04-11 05:47:12][EPOCH] Epoch 15/200 train start  (elapsed=4:10:00)
+[2026-04-11 06:04:32][TRAIN] Epoch 15 train done  1040s  loss=0.0790  bis=0.0026  phase=0.1263  stim=0.0441  mono=0.0000  sps=110982
+[2026-04-11 06:04:32][EPOCH] Epoch 15/200 val start
+2026-04-11 06:05:03    15    0.0790   0.0026   0.1263   0.0441   0.0000    7.34   19.67   23.39   97.9%   0.530   9.86e-05  110982    1040s    30s  
+[2026-04-11 06:05:03][VAL] Epoch 15 val done  30s  vMAE=7.34  vInd=19.67  vRec=23.39  PhAcc=97.9%  StAUC=0.530  total_elapsed=4:27:51  eta=55:03:29
+[2026-04-11 06:05:03][EPOCH] Epoch 16/200 train start  (elapsed=4:27:51)
+[2026-04-11 06:22:23][TRAIN] Epoch 16 train done  1040s  loss=0.0734  bis=0.0026  phase=0.1153  stim=0.0441  mono=0.0000  sps=110981
+[2026-04-11 06:22:23][EPOCH] Epoch 16/200 val start
+2026-04-11 06:22:53    16    0.0734   0.0026   0.1153   0.0441   0.0000    6.53   15.35   16.63   97.8%   0.536   9.84e-05  110981    1040s    30s  
+[2026-04-11 06:22:53][VAL] Epoch 16 val done  30s  vMAE=6.53  vInd=15.35  vRec=16.63  PhAcc=97.8%  StAUC=0.536  total_elapsed=4:45:41  eta=54:45:26
+[2026-04-11 06:22:53][EPOCH] Epoch 17/200 train start  (elapsed=4:45:41)
+[2026-04-11 06:40:13][TRAIN] Epoch 17 train done  1040s  loss=0.0713  bis=0.0025  phase=0.1111  stim=0.0441  mono=0.0000  sps=111019
+[2026-04-11 06:40:13][EPOCH] Epoch 17/200 val start
+2026-04-11 06:40:44    17    0.0713   0.0025   0.1111   0.0441   0.0000    6.59   14.59   15.13   98.0%   0.540   9.82e-05  111019    1040s    30s  
+[2026-04-11 06:40:44][VAL] Epoch 17 val done  30s  vMAE=6.59  vInd=14.59  vRec=15.13  PhAcc=98.0%  StAUC=0.540  total_elapsed=5:03:31  eta=54:27:25
+[2026-04-11 06:40:44][EPOCH] Epoch 18/200 train start  (elapsed=5:03:31)
+[2026-04-11 06:58:04][TRAIN] Epoch 18 train done  1040s  loss=0.0682  bis=0.0025  phase=0.1049  stim=0.0440  mono=0.0000  sps=110876
+[2026-04-11 06:58:04][EPOCH] Epoch 18/200 val start
+2026-04-11 06:58:34    18    0.0682   0.0025   0.1049   0.0440   0.0000    6.55   15.51   16.38   97.2%   0.536   9.80e-05  110876    1040s    31s  
+[2026-04-11 06:58:34][VAL] Epoch 18 val done  31s  vMAE=6.55  vInd=15.51  vRec=16.38  PhAcc=97.2%  StAUC=0.536  total_elapsed=5:21:22  eta=54:09:27
+[2026-04-11 06:58:34][EPOCH] Epoch 19/200 train start  (elapsed=5:21:22)
+[2026-04-11 07:15:54][TRAIN] Epoch 19 train done  1040s  loss=0.0653  bis=0.0025  phase=0.0992  stim=0.0440  mono=0.0000  sps=110991
+[2026-04-11 07:15:54][EPOCH] Epoch 19/200 val start
+2026-04-11 07:16:24    19    0.0653   0.0025   0.0992   0.0440   0.0000    6.18   14.56   12.12   97.0%   0.544   9.78e-05  110991    1040s    30s  *** BEST
+[2026-04-11 07:16:24][VAL] Epoch 19 val done  30s  vMAE=6.18  vInd=14.56  vRec=12.12  PhAcc=97.0%  StAUC=0.544  total_elapsed=5:39:12  eta=53:51:25
+[2026-04-11 07:16:24][CKPT] Checkpoint saved  epoch=19  val_MAE=6.18 BIS  path=outputs\checkpoints\v8\best_model_v2.pt
+[2026-04-11 07:16:24][EPOCH] Epoch 20/200 train start  (elapsed=5:39:12)
+[2026-04-11 07:33:46][TRAIN] Epoch 20 train done  1041s  loss=0.0622  bis=0.0024  phase=0.0931  stim=0.0440  mono=0.0000  sps=110940
+[2026-04-11 07:33:46][EPOCH] Epoch 20/200 val start
+2026-04-11 07:34:17    20    0.0622   0.0024   0.0931   0.0440   0.0000    6.78   17.39   19.65   97.1%   0.538   9.76e-05  110940    1041s    31s  
+[2026-04-11 07:34:17][VAL] Epoch 20 val done  31s  vMAE=6.78  vInd=17.39  vRec=19.65  PhAcc=97.1%  StAUC=0.538  total_elapsed=5:57:04  eta=53:33:42
+[2026-04-11 07:34:17][EPOCH] Epoch 21/200 train start  (elapsed=5:57:04)
+[2026-04-11 07:51:41][TRAIN] Epoch 21 train done  1044s  loss=0.0596  bis=0.0024  phase=0.0880  stim=0.0440  mono=0.0000  sps=111040
+[2026-04-11 07:51:41][EPOCH] Epoch 21/200 val start
+2026-04-11 07:52:12    21    0.0596   0.0024   0.0880   0.0440   0.0000    6.98   16.21   21.07   97.7%   0.533   9.73e-05  111040    1044s    31s  
+[2026-04-11 07:52:12][VAL] Epoch 21 val done  31s  vMAE=6.98  vInd=16.21  vRec=21.07  PhAcc=97.7%  StAUC=0.533  total_elapsed=6:15:00  eta=53:16:26
+[2026-04-11 07:52:12][EPOCH] Epoch 22/200 train start  (elapsed=6:15:00)
+[2026-04-11 08:09:33][TRAIN] Epoch 22 train done  1041s  loss=0.0579  bis=0.0024  phase=0.0846  stim=0.0439  mono=0.0000  sps=110911
+[2026-04-11 08:09:33][EPOCH] Epoch 22/200 val start
+2026-04-11 08:10:03    22    0.0579   0.0024   0.0846   0.0439   0.0000    7.78   19.18   16.94   97.5%   0.545   9.71e-05  110911    1041s    30s  
+[2026-04-11 08:10:03][VAL] Epoch 22 val done  30s  vMAE=7.78  vInd=19.18  vRec=16.94  PhAcc=97.5%  StAUC=0.545  total_elapsed=6:32:51  eta=52:58:34
+[2026-04-11 08:10:03][EPOCH] Epoch 23/200 train start  (elapsed=6:32:51)
+[2026-04-11 08:27:23][TRAIN] Epoch 23 train done  1040s  loss=0.0565  bis=0.0024  phase=0.0817  stim=0.0439  mono=0.0000  sps=111055
+[2026-04-11 08:27:23][EPOCH] Epoch 23/200 val start
+2026-04-11 08:27:54    23    0.0565   0.0024   0.0817   0.0439   0.0000    6.70   15.96   17.93   97.9%   0.536   9.68e-05  111055    1040s    30s  
+[2026-04-11 08:27:54][VAL] Epoch 23 val done  30s  vMAE=6.70  vInd=15.96  vRec=17.93  PhAcc=97.9%  StAUC=0.536  total_elapsed=6:50:42  eta=52:40:37
+[2026-04-11 08:27:54][EPOCH] Epoch 24/200 train start  (elapsed=6:50:42)
+[2026-04-11 08:45:14][TRAIN] Epoch 24 train done  1040s  loss=0.0540  bis=0.0024  phase=0.0768  stim=0.0439  mono=0.0000  sps=111080
+[2026-04-11 08:45:14][EPOCH] Epoch 24/200 val start
+2026-04-11 08:45:44    24    0.0540   0.0024   0.0768   0.0439   0.0000    6.65   14.73   17.99   97.9%   0.539   9.65e-05  111080    1040s    30s  
+[2026-04-11 08:45:44][VAL] Epoch 24 val done  30s  vMAE=6.65  vInd=14.73  vRec=17.99  PhAcc=97.9%  StAUC=0.539  total_elapsed=7:08:32  eta=52:22:37
+[2026-04-11 08:45:44][EPOCH] Epoch 25/200 train start  (elapsed=7:08:32)
+[2026-04-11 09:03:03][TRAIN] Epoch 25 train done  1039s  loss=0.0516  bis=0.0023  phase=0.0723  stim=0.0439  mono=0.0000  sps=111082
+[2026-04-11 09:03:03][EPOCH] Epoch 25/200 val start
+2026-04-11 09:03:34    25    0.0516   0.0023   0.0723   0.0439   0.0000    6.03   13.97    9.44   96.9%   0.550   9.62e-05  111082    1039s    30s  *** BEST
+[2026-04-11 09:03:34][VAL] Epoch 25 val done  30s  vMAE=6.03  vInd=13.97  vRec=9.44  PhAcc=96.9%  StAUC=0.550  total_elapsed=7:26:21  eta=52:04:32
+[2026-04-11 09:03:34][CKPT] Checkpoint saved  epoch=25  val_MAE=6.03 BIS  path=outputs\checkpoints\v8\best_model_v2.pt
+[2026-04-11 09:03:34][EPOCH] Epoch 26/200 train start  (elapsed=7:26:21)
+[2026-04-11 09:21:22][TRAIN] Epoch 26 train done  1069s  loss=0.0510  bis=0.0023  phase=0.0710  stim=0.0438  mono=0.0000  sps=108151
+[2026-04-11 09:21:22][EPOCH] Epoch 26/200 val start
+2026-04-11 09:21:55    26    0.0510   0.0023   0.0710   0.0438   0.0000    6.94   16.98   20.14   98.0%   0.540   9.59e-05  108151    1069s    33s  
+[2026-04-11 09:21:55][VAL] Epoch 26 val done  33s  vMAE=6.94  vInd=16.98  vRec=20.14  PhAcc=98.0%  StAUC=0.540  total_elapsed=7:44:43  eta=51:50:04
+[2026-04-11 09:21:55][EPOCH] Epoch 27/200 train start  (elapsed=7:44:43)
+[2026-04-11 09:40:18][TRAIN] Epoch 27 train done  1103s  loss=0.0501  bis=0.0023  phase=0.0693  stim=0.0438  mono=0.0000  sps=104793
+[2026-04-11 09:40:18][EPOCH] Epoch 27/200 val start
+2026-04-11 09:40:51    27    0.0501   0.0023   0.0693   0.0438   0.0000    6.28   15.63   14.94   97.3%   0.541   9.56e-05  104793    1103s    33s  
+[2026-04-11 09:40:51][VAL] Epoch 27 val done  33s  vMAE=6.28  vInd=15.63  vRec=14.94  PhAcc=97.3%  StAUC=0.541  total_elapsed=8:03:39  eta=51:38:58
+[2026-04-11 09:40:51][EPOCH] Epoch 28/200 train start  (elapsed=8:03:39)
+[2026-04-11 09:59:18][TRAIN] Epoch 28 train done  1107s  loss=0.0483  bis=0.0023  phase=0.0658  stim=0.0438  mono=0.0000  sps=101238
+[2026-04-11 09:59:18][EPOCH] Epoch 28/200 val start
+2026-04-11 09:59:50    28    0.0483   0.0023   0.0658   0.0438   0.0000    6.03   14.42   13.68   97.7%   0.544   9.53e-05  101238    1107s    31s  
+[2026-04-11 09:59:50][VAL] Epoch 28 val done  31s  vMAE=6.03  vInd=14.42  vRec=13.68  PhAcc=97.7%  StAUC=0.544  total_elapsed=8:22:37  eta=51:27:35
+[2026-04-11 09:59:50][EPOCH] Epoch 29/200 train start  (elapsed=8:22:37)
+[2026-04-11 10:17:11][TRAIN] Epoch 29 train done  1041s  loss=0.0467  bis=0.0023  phase=0.0625  stim=0.0438  mono=0.0000  sps=110381
+[2026-04-11 10:17:11][EPOCH] Epoch 29/200 val start
+2026-04-11 10:17:42    29    0.0467   0.0023   0.0625   0.0438   0.0000    6.68   15.55   20.59   97.6%   0.538   9.50e-05  110381    1041s    31s  
+[2026-04-11 10:17:42][VAL] Epoch 29 val done  31s  vMAE=6.68  vInd=15.55  vRec=20.59  PhAcc=97.6%  StAUC=0.538  total_elapsed=8:40:30  eta=51:09:10
+[2026-04-11 10:17:42][EPOCH] Epoch 30/200 train start  (elapsed=8:40:30)
+[2026-04-11 10:34:57][TRAIN] Epoch 30 train done  1035s  loss=0.0463  bis=0.0023  phase=0.0619  stim=0.0438  mono=0.0000  sps=110588
+[2026-04-11 10:34:57][EPOCH] Epoch 30/200 val start
+2026-04-11 10:35:28    30    0.0463   0.0023   0.0619   0.0438   0.0000    7.54   16.90   19.69   97.8%   0.538   9.46e-05  110588    1035s    31s  
+[2026-04-11 10:35:28][VAL] Epoch 30 val done  31s  vMAE=7.54  vInd=16.90  vRec=19.69  PhAcc=97.8%  StAUC=0.538  total_elapsed=8:58:16  eta=50:50:11
+[2026-04-11 10:35:28][EPOCH] Epoch 31/200 train start  (elapsed=8:58:16)
+[2026-04-11 10:52:43][TRAIN] Epoch 31 train done  1035s  loss=0.0458  bis=0.0022  phase=0.0609  stim=0.0437  mono=0.0000  sps=110613
+[2026-04-11 10:52:43][EPOCH] Epoch 31/200 val start
+2026-04-11 10:53:14    31    0.0458   0.0022   0.0609   0.0437   0.0000    6.44   13.45   15.93   97.1%   0.543   9.42e-05  110613    1035s    31s  
+[2026-04-11 10:53:14][VAL] Epoch 31 val done  31s  vMAE=6.44  vInd=13.45  vRec=15.93  PhAcc=97.1%  StAUC=0.543  total_elapsed=9:16:02  eta=50:31:18
+[2026-04-11 10:53:14][EPOCH] Epoch 32/200 train start  (elapsed=9:16:02)
+[2026-04-11 11:10:29][TRAIN] Epoch 32 train done  1035s  loss=0.0441  bis=0.0022  phase=0.0575  stim=0.0437  mono=0.0000  sps=110417
+[2026-04-11 11:10:29][EPOCH] Epoch 32/200 val start
+2026-04-11 11:11:00    32    0.0441   0.0022   0.0575   0.0437   0.0000    6.66   15.50   20.01   97.9%   0.540   9.39e-05  110417    1035s    31s  
+[2026-04-11 11:11:00][VAL] Epoch 32 val done  31s  vMAE=6.66  vInd=15.50  vRec=20.01  PhAcc=97.9%  StAUC=0.540  total_elapsed=9:33:47  eta=50:12:25
+[2026-04-11 11:11:00][EPOCH] Epoch 33/200 train start  (elapsed=9:33:47)
+[2026-04-11 11:28:15][TRAIN] Epoch 33 train done  1035s  loss=0.0446  bis=0.0022  phase=0.0585  stim=0.0437  mono=0.0000  sps=110386
+[2026-04-11 11:28:15][EPOCH] Epoch 33/200 val start
+2026-04-11 11:28:46    33    0.0446   0.0022   0.0585   0.0437   0.0000    6.51   15.81   19.65   97.8%   0.542   9.35e-05  110386    1035s    31s  
+[2026-04-11 11:28:46][VAL] Epoch 33 val done  31s  vMAE=6.51  vInd=15.81  vRec=19.65  PhAcc=97.8%  StAUC=0.542  total_elapsed=9:51:33  eta=49:53:40
+[2026-04-11 11:28:46][EPOCH] Epoch 34/200 train start  (elapsed=9:51:33)
+[2026-04-11 11:46:01][TRAIN] Epoch 34 train done  1035s  loss=0.0421  bis=0.0022  phase=0.0535  stim=0.0437  mono=0.0000  sps=110351
+[2026-04-11 11:46:01][EPOCH] Epoch 34/200 val start
+2026-04-11 11:46:32    34    0.0421   0.0022   0.0535   0.0437   0.0000    6.83   14.87   13.88   97.9%   0.549   9.31e-05  110351    1035s    31s  
+[2026-04-11 11:46:32][VAL] Epoch 34 val done  31s  vMAE=6.83  vInd=14.87  vRec=13.88  PhAcc=97.9%  StAUC=0.549  total_elapsed=10:09:19  eta=49:34:57
+[2026-04-11 11:46:32][EPOCH] Epoch 35/200 train start  (elapsed=10:09:19)
+[2026-04-11 12:03:47][TRAIN] Epoch 35 train done  1035s  loss=0.0419  bis=0.0022  phase=0.0533  stim=0.0437  mono=0.0000  sps=110357
+[2026-04-11 12:03:47][EPOCH] Epoch 35/200 val start
+2026-04-11 12:04:17    35    0.0419   0.0022   0.0533   0.0437   0.0000    6.67   16.71   19.94   97.6%   0.535   9.27e-05  110357    1035s    31s  
+[2026-04-11 12:04:17][VAL] Epoch 35 val done  31s  vMAE=6.67  vInd=16.71  vRec=19.94  PhAcc=97.6%  StAUC=0.535  total_elapsed=10:27:05  eta=49:16:17
+[2026-04-11 12:04:17][EPOCH] Epoch 36/200 train start  (elapsed=10:27:05)

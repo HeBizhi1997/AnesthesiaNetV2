@@ -1,0 +1,100 @@
+# EEG Preprocessing Pipeline Configuration v2
+#
+# Core fix from v1: seq_len 10→300 (5 minutes) with non-overlapping stride.
+#
+# Why v1 failed (MAE=15, r=0.10, worse than linear regression):
+#   - seq_len=10 (10 seconds): LNN can't see induction dynamics (2-5 min)
+#   - h=None every batch: LNN hidden state never used for temporal memory
+#   - 13M overlapping sequences but only 1.2 passes through data in 22 epochs
+#   - Model converged to predicting ~mean BIS (≈44) for all inputs
+#
+# How v2 fixes this:
+#   - seq_len=300 (5 minutes): one batch covers the entire induction arc
+#   - seq_stride=300 (non-overlapping): ~45K unique sequences per split
+#     → only 1400 batches/epoch → 5-8 min/epoch (vs 73 min without cap)
+#   - batch_size=32: 32×300=9600 CNN items/batch, good GPU utilisation
+#   - h=None is still reset per batch, but 5-min warmup is acceptable
+#     since the first 60s is "spin-up" and the remaining 240s has rich context
+#   - lambda_monotonic=0.5: stronger penalty for BIS rising during induction
+
+eeg:
+  channels: ["BIS/EEG1_WAV", "BIS/EEG2_WAV"]
+  srate: 128
+
+labels:
+  tracks: ["BIS/BIS", "BIS/SQI", "BIS/SR"]
+  target: "BIS/BIS"
+  sqi_track: "BIS/SQI"
+  sr_track: "BIS/SR"
+
+windowing:
+  window_sec: 4
+  stride_sec: 1
+  label_lag_sec: 15
+  min_valid_label: 10
+  max_valid_label: 100
+  baseline_sec: 60
+
+sqi:
+  min_score: 0.5
+  kurtosis_thresh: 5.0
+  high_freq_ratio_thresh: 0.4
+
+filters:
+  median_kernel_ms: 20
+  highpass_hz: 0.5
+  lowpass_hz: 47.0
+  notch_hz: [50.0]
+  notch_q: 30.0
+
+wavelet:
+  wavelet: "db4"
+  level: 5
+  esu_energy_thresh: 3.0
+
+features:
+  bands:
+    delta: [0.5, 4.0]
+    theta: [4.0, 8.0]
+    alpha: [8.0, 13.0]
+    beta:  [13.0, 30.0]
+    gamma: [30.0, 47.0]
+  permutation_entropy:
+    order: 6
+    delay: 1
+  sef95: true
+  lzc: true
+  bsr: true
+  bsr_thresholds_uv: [2.0, 5.0, 10.0]
+  bsr_window_sec: 4
+
+model:
+  cnn_channels: [32, 64, 128]
+  cnn_kernel: 7
+  feature_dim: 24
+  lnn_units: 64
+  lnn_sparsity: 0.5
+  lnn_backend: "gru"     # gru = cuDNN-fused, 10-20x faster than CfC for seq_len=300
+  output_range: [0, 100]
+
+training:
+  seq_len: 300          # 5-minute context window (was 10 s)
+  seq_stride: 300       # non-overlapping — ~45K sequences, ~1400 batches/epoch
+  batch_size: 32        # 32 patients × 300 windows = 9600 CNN items/batch
+  # steps_per_epoch not set — only ~1400 batches, ~5 min/epoch
+
+  lr: 5.0e-4
+  epochs: 200
+  patience: 30
+  lambda_monotonic: 0.5
+  lambda_physio: 0.0
+  noise_std: 0.05
+  val_split: 0.15
+  test_split: 0.1
+  seed: 42
+
+paths:
+  raw_data: "raw_data"
+  preprocessed: "outputs/preprocessed"
+  checkpoints: "outputs/checkpoints/v2"
+  logs: "outputs/logs"

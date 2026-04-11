@@ -1,0 +1,44 @@
+
+Model: AnesthesiaNetV2  parameters: 430,475
+torch.compile disabled (Triton not supported on Windows)
+Case filter (BIS std p10-p90, 7.8-16.7): kept 1399/1749 (removed 350)
+Patient split — train: 1051, val: 209, test: 139
+Loading dataset into RAM (cache_in_memory=True)…
+Induction boost x15: added 18,255 sequences (total 86,021)
+  train sequences: 86,021, val: 14,303, test: 8,847
+DataLoader workers: 0 (cache in RAM)
+AMP enabled: torch.bfloat16
+
+====================================================================================================
+  AnesthesiaNetV2 Training  |  device=cuda  AMP=True(torch.bfloat16)
+  参数量=430,475  epochs=200  patience=40  lr=1.00e-04  batch=32
+  steps/epoch=2,689  train_seqs=86,021  val_seqs=14,303
+====================================================================================================
+  Ep   TotLoss      BIS    Phase     Stim     Mono    vMAE    vInd    vRec   PhAcc   StAUC         LR     SPS      t  flag
+--------------------------------------------------------------------------------------------------------------------------
+   1    0.3181   0.0050   0.6318   0.0158   0.0000    7.37   13.25   27.47   94.8%   0.521   1.00e-04  105178   838s  *** BEST
+           -> checkpoint saved  epoch=1  val_MAE=7.37 BIS
+   2    0.2251   0.0034   0.4105   0.0151   0.0000    6.96   13.65   24.37   96.6%   0.535   1.00e-04  105472   884s  *** BEST
+           -> checkpoint saved  epoch=2  val_MAE=6.96 BIS
+   3    0.1954   0.0030   0.3453   0.0150   0.0000    6.99   10.18   18.92   95.5%   0.542   9.99e-05  103053   878s  
+   4    0.1768   0.0028   0.3087   0.0149   0.0000    6.65   11.31   17.47   96.1%   0.548   9.99e-05  105632   862s  *** BEST
+           -> checkpoint saved  epoch=4  val_MAE=6.65 BIS
+   5    0.1596   0.0027   0.2734   0.0149   0.0000    6.05   11.12   13.29   96.4%   0.559   9.98e-05  104982   872s  *** BEST
+           -> checkpoint saved  epoch=5  val_MAE=6.05 BIS
+Traceback (most recent call last):
+  File "C:\Users\admin\Desktop\tianjin\scripts\train.py", line 267, in <module>
+    main()
+    ~~~~^^
+  File "C:\Users\admin\Desktop\tianjin\scripts\train.py", line 263, in main
+    trainer.fit()
+    ~~~~~~~~~~~^^
+  File "C:\Users\admin\Desktop\tianjin\src\training\trainer_v2.py", line 356, in fit
+    val_m   = self.val_epoch(epoch)
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\torch\utils\_contextlib.py", line 120, in decorate_context
+    return func(*args, **kwargs)
+  File "C:\Users\admin\Desktop\tianjin\src\training\trainer_v2.py", line 314, in val_epoch
+    stim_auroc = _auroc_numpy(st_scores, st_labels)
+  File "C:\Users\admin\Desktop\tianjin\src\training\trainer_v2.py", line 40, in _auroc_numpy
+    auc = ((pos[:, None] > neg[None, :]).sum() +
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+numpy._core._exceptions._ArrayMemoryError: Unable to allocate 124. GiB for an array with shape (31317, 4259583) and data type bool

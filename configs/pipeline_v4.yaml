@@ -1,0 +1,115 @@
+# EEG Pipeline Configuration v4
+#
+# Correct application of the data quality document:
+#
+# Document rule                     | v4 implementation
+# ─────────────────────────────────────────────────────────────────────────────
+# 1. Calculate perplexity            | case_std = per-case BIS std (proxy)
+# 2. Plot distribution               | done: BIS std histogram analyzed
+# 3. Remove bottom/top 10%          | case_std_pct_low=10, case_std_pct_high=90
+#    - Bottom 10% (std<7.8): flat    |   175 degenerate cases removed
+#      recordings, equipment issue   |
+#    - Top 10% (std>16.7): artifact  |   175 high-artifact cases removed
+# 4. Keep middle 80%                 | 1399/1749 cases retained (full sequences)
+#
+# Why v3 was wrong (min_seq_std=5):
+#   Filtering at SEQUENCE level removed flat maintenance segments.
+#   But the validation set still had flat sequences → train/val mismatch.
+#   The model never learned "stable input → stable output" → val MAE worse.
+#
+# Key insight from document "Loss separation = insufficient data diversity":
+#   v2's epoch 4 divergence was due to LR=5e-4 being too high, not data.
+#   With lower LR=1e-4, the same v2 approach should converge stably.
+#
+# v4 vs v2:
+#   - case_std_pct_low=10, case_std_pct_high=90: remove 350 degenerate cases
+#   - lr: 5e-4 -> 1e-4: more stable convergence
+#   - patience: 30 -> 40: give more time to find minimum
+#   - Everything else same as v2 (seq_len=300, seq_stride=300, GRU backend)
+
+eeg:
+  channels: ["BIS/EEG1_WAV", "BIS/EEG2_WAV"]
+  srate: 128
+
+labels:
+  tracks: ["BIS/BIS", "BIS/SQI", "BIS/SR"]
+  target: "BIS/BIS"
+  sqi_track: "BIS/SQI"
+  sr_track: "BIS/SR"
+
+windowing:
+  window_sec: 4
+  stride_sec: 1
+  label_lag_sec: 15
+  min_valid_label: 10
+  max_valid_label: 100
+  baseline_sec: 60
+
+sqi:
+  min_score: 0.5
+  kurtosis_thresh: 5.0
+  high_freq_ratio_thresh: 0.4
+
+filters:
+  median_kernel_ms: 20
+  highpass_hz: 0.5
+  lowpass_hz: 47.0
+  notch_hz: [50.0]
+  notch_q: 30.0
+
+wavelet:
+  wavelet: "db4"
+  level: 5
+  esu_energy_thresh: 3.0
+
+features:
+  bands:
+    delta: [0.5, 4.0]
+    theta: [4.0, 8.0]
+    alpha: [8.0, 13.0]
+    beta:  [13.0, 30.0]
+    gamma: [30.0, 47.0]
+  permutation_entropy:
+    order: 6
+    delay: 1
+  sef95: true
+  lzc: true
+  bsr: true
+  bsr_thresholds_uv: [2.0, 5.0, 10.0]
+  bsr_window_sec: 4
+
+model:
+  cnn_channels: [32, 64, 128]
+  cnn_kernel: 7
+  feature_dim: 24
+  lnn_units: 64
+  lnn_sparsity: 0.5
+  lnn_backend: "gru"
+  output_range: [0, 100]
+
+training:
+  seq_len: 300
+  seq_stride: 300
+
+  # Case-level data quality filter (document: remove bottom/top 10% by perplexity)
+  case_std_pct_low: 10    # remove cases with BIS std < p10 (flat/degenerate)
+  case_std_pct_high: 90   # remove cases with BIS std > p90 (high artifact)
+  min_seq_std: 0.0        # no sequence-level filtering (keep all maintenance segs)
+  balance_bis: false
+
+  batch_size: 32
+  lr: 1.0e-4              # lower than v2 (5e-4) for stable convergence
+  epochs: 200
+  patience: 40
+  lambda_monotonic: 0.5
+  lambda_physio: 0.0
+  noise_std: 0.05
+  val_split: 0.15
+  test_split: 0.1
+  seed: 42
+
+paths:
+  raw_data: "raw_data"
+  preprocessed: "outputs/preprocessed"
+  checkpoints: "outputs/checkpoints/v4"
+  logs: "outputs/logs"

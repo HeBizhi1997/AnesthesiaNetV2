@@ -1,0 +1,140 @@
+# EEG Pipeline Configuration v6 - AnesthesiaNetV2 + Architecture Improvements
+#
+# Layer-1 optimizations (loss / data):
+#   1. UW-SO adaptive loss weighting (use_auto_weight=true)
+#   2. Stim detection fix: focal_alpha=0.99 + stim_pos_weight=99
+#   3. Induction oversampling: induction_boost=15
+#
+# Architecture improvements (code refactor):
+#   4. WaveformEncoder with residual bottleneck skip (replaces DilatedCNNEncoder)
+#   5. LNNCore replaces bare nn.GRU  ->  backend="gru" keeps identical behavior;
+#      switch to "cfc" for CfC/NCP adaptive time constants (requires ncps)
+#   6. SQI Inertia Mode: sqi_inertia_threshold=0.5
+#      When per-window mean SQI < 0.5, GRU output is held at the last clean state.
+#      Prevents ESU/electrode-pop artifacts from corrupting temporal context.
+#   7. PAC feature (pac: false by default - needs HDF5 reprocessing to enable)
+
+eeg:
+  channels: ["BIS/EEG1_WAV", "BIS/EEG2_WAV"]
+  srate: 128
+
+labels:
+  tracks: ["BIS/BIS", "BIS/SQI", "BIS/SR"]
+  target: "BIS/BIS"
+  sqi_track: "BIS/SQI"
+  sr_track: "BIS/SR"
+
+windowing:
+  window_sec: 4
+  stride_sec: 1
+  label_lag_sec: 15
+  min_valid_label: 10
+  max_valid_label: 100
+  baseline_sec: 60
+
+sqi:
+  min_score: 0.5
+  kurtosis_thresh: 5.0
+  high_freq_ratio_thresh: 0.4
+
+filters:
+  median_kernel_ms: 20
+  highpass_hz: 0.5
+  lowpass_hz: 47.0
+  notch_hz: [50.0]
+  notch_q: 30.0
+
+wavelet:
+  wavelet: "db4"
+  level: 5
+  esu_energy_thresh: 3.0
+
+features:
+  bands:
+    delta: [0.5, 4.0]
+    theta: [4.0, 8.0]
+    alpha: [8.0, 13.0]
+    beta:  [13.0, 30.0]
+    gamma: [30.0, 47.0]
+  permutation_entropy:
+    order: 6
+    delay: 1
+  sef95: true
+  lzc: true
+  bsr: true
+  bsr_thresholds_uv: [2.0, 5.0, 10.0]
+  bsr_window_sec: 4
+  # PAC (alpha-gamma phase-amplitude coupling): propofol-sensitive biomarker.
+  # Disabled by default — requires HDF5 reprocessing (run preprocess_data.py)
+  # before enabling. When enabled, feature_dim increases by n_channels (2 -> 26).
+  pac: false
+
+model:
+  # AnesthesiaNetV2 parameters
+  cnn_channels: [32, 64, 128]
+  cnn_kernel: 7
+  # feature_dim is computed automatically by PipelineValidator from features config.
+  # formula: feats_per_ch * n_channels + 2
+  # default (pac=false): (5+1+1+1+3) * 2 + 2 = 24
+  # with pac=true:       (5+1+1+1+3+1) * 2 + 2 = 26
+  feature_dim: 24
+  d_model: 128
+  gru_layers: 2
+  gru_dropout: 0.15
+  # LNN backend: "gru" = cuDNN fused GRU (fast, identical to v5 behavior)
+  #              "cfc" = CfC/NCP adaptive time constants (requires ncps install)
+  #              "auto" = CfC if ncps available, else GRU
+  lnn_backend: "gru"
+  # SQI inertia: hold last clean hidden state when window quality < threshold.
+  # 0.0 = disabled. 0.5 = freeze on any window with mean SQI below 0.5.
+  sqi_inertia_threshold: 0.5
+
+training:
+  model_version: "v2"
+
+  seq_len: 300
+  seq_stride: 300
+
+  case_std_pct_low: 10
+  case_std_pct_high: 90
+  min_seq_std: 0.0
+  balance_bis: false
+
+  # ── Layer-1: Stim detection fix ───────────────────────────────────────────
+  # Previous focal_alpha=0.25 DOWN-weighted positives. Fixed to 0.99.
+  # pos_weight=99 compensates for 144:1 negative-to-positive imbalance.
+  focal_alpha:      0.99
+  stim_pos_weight:  99.0
+  focal_gamma:      2.0
+
+  # ── Layer-1: UW-SO adaptive task weighting ────────────────────────────────
+  # When use_auto_weight=true, fixed lambdas below are used as soft baseline
+  # but overridden by per-batch log-scale normalised weights.
+  # auto_weight_temp=0.5: moderate concentration (not winner-takes-all).
+  use_auto_weight:  true
+  auto_weight_temp: 0.5
+  lambda_bis:   1.0
+  lambda_phase: 0.5
+  lambda_stim:  0.3
+  lambda_mono:  0.3
+
+  # ── Layer-1: Induction oversampling ───────────────────────────────────────
+  # Repeat training sequences containing induction (phase=1) by 15x extra.
+  # Induction median duration 44s << seq_len 300s, so each 300s sequence
+  # that spans induction gets 15 extra repeats => ~4% induction mix.
+  induction_boost: 15
+
+  batch_size: 32
+  lr: 1.0e-4      # full cosine schedule from scratch (v6 is not resuming from v5)
+  epochs: 200
+  patience: 40
+  noise_std: 0.05
+  val_split: 0.15
+  test_split: 0.1
+  seed: 42
+
+paths:
+  raw_data: "raw_data"
+  preprocessed: "outputs/preprocessed"
+  checkpoints: "outputs/checkpoints/v6"
+  logs: "outputs/logs"

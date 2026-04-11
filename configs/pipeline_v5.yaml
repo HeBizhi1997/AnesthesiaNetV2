@@ -1,0 +1,106 @@
+# EEG Pipeline Configuration v5 - Multi-task AnesthesiaNetV2
+#
+# Architecture changes vs v4:
+#   - AnesthesiaNetV2: phase classification + stimulation detection + phase-gated BIS
+#   - PhaseGatedBISHead: per-phase linear heads soft-routed by phase probabilities
+#   - StimulationCorrector: learned BIS correction during stimulation events
+#   - d_model=128 (vs v4's 64): larger shared representation
+#
+# Loss:
+#   L = 1.0*L_bis(Huber) + 0.5*L_phase(weighted CE) + 0.3*L_stim(focal) + 0.3*L_mono
+#
+# Data: requires phases/stim_events in HDF5 (run augment_hdf5_with_labels first).
+# Falls back to maintenance label (phase=2) and zero stim if labels not present.
+
+eeg:
+  channels: ["BIS/EEG1_WAV", "BIS/EEG2_WAV"]
+  srate: 128
+
+labels:
+  tracks: ["BIS/BIS", "BIS/SQI", "BIS/SR"]
+  target: "BIS/BIS"
+  sqi_track: "BIS/SQI"
+  sr_track: "BIS/SR"
+
+windowing:
+  window_sec: 4
+  stride_sec: 1
+  label_lag_sec: 15
+  min_valid_label: 10
+  max_valid_label: 100
+  baseline_sec: 60
+
+sqi:
+  min_score: 0.5
+  kurtosis_thresh: 5.0
+  high_freq_ratio_thresh: 0.4
+
+filters:
+  median_kernel_ms: 20
+  highpass_hz: 0.5
+  lowpass_hz: 47.0
+  notch_hz: [50.0]
+  notch_q: 30.0
+
+wavelet:
+  wavelet: "db4"
+  level: 5
+  esu_energy_thresh: 3.0
+
+features:
+  bands:
+    delta: [0.5, 4.0]
+    theta: [4.0, 8.0]
+    alpha: [8.0, 13.0]
+    beta:  [13.0, 30.0]
+    gamma: [30.0, 47.0]
+  permutation_entropy:
+    order: 6
+    delay: 1
+  sef95: true
+  lzc: true
+  bsr: true
+  bsr_thresholds_uv: [2.0, 5.0, 10.0]
+  bsr_window_sec: 4
+
+model:
+  # AnesthesiaNetV2 parameters
+  cnn_channels: [32, 64, 128]
+  cnn_kernel: 7
+  feature_dim: 24
+  d_model: 128        # larger shared hidden dim (vs 64 in v4)
+  gru_layers: 2
+  gru_dropout: 0.15
+
+training:
+  model_version: "v2"   # triggers AnesthesiaNetV2 + TrainerV2
+
+  seq_len: 300
+  seq_stride: 300
+
+  # Same case-level data quality filter as v4
+  case_std_pct_low: 10
+  case_std_pct_high: 90
+  min_seq_std: 0.0
+  balance_bis: false
+
+  # Multi-task loss weights
+  lambda_bis:   1.0   # BIS Huber regression
+  lambda_phase: 0.5   # Phase cross-entropy (inverse-freq weighted)
+  lambda_stim:  0.3   # Stimulation focal loss (gamma=2, alpha=0.25)
+  lambda_mono:  0.3   # Monotonicity loss (induction/recovery direction)
+
+  batch_size: 32
+  lr: 1.0e-4
+  epochs: 200
+  patience: 40
+  noise_std: 0.05
+  val_split: 0.15
+  test_split: 0.1
+  seed: 42
+
+paths:
+  raw_data: "raw_data"
+  preprocessed: "outputs/preprocessed"
+  checkpoints: "outputs/checkpoints/v5"
+  logs: "outputs/logs"

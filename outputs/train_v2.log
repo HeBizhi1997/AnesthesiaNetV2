@@ -1,0 +1,29 @@
+Model parameters: 5,452,641
+torch.compile disabled (Triton not supported on Windows)
+Patient split — train: 1313, val: 262, test: 174
+Loading dataset into RAM (cache_in_memory=True)…
+  train sequences: 43,053, val: 9,000, test: 5,604
+Patient split — train: 1313, val: 262, test: 174
+Loading dataset into RAM (cache_in_memory=True)…
+  train sequences: 13,982,339, val: 2,904,079, test: 1,827,114
+Val dataset rebuilt with seq_len=10 for speed
+DataLoader workers: 0 (cache in RAM)
+AMP enabled: torch.bfloat16
+C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\torch\optim\lr_scheduler.py:192: UserWarning: Detected call of `lr_scheduler.step()` before `optimizer.step()`. In PyTorch 1.1.0 and later, you should call them in the opposite order: `optimizer.step()` before `lr_scheduler.step()`.  Failure to do this will result in PyTorch skipping the first value of the learning rate schedule. See more details at https://pytorch.org/docs/stable/optim.html#how-to-adjust-learning-rate
+  warnings.warn(
+Resumed from epoch 1  best_val_loss=0.0063  val_MAE=7.76 BIS
+
+Training on cuda  |  AMP=True (torch.bfloat16)
+Epochs=200  patience=30  lr=5.00e-04  batch=32
+steps/epoch=1,346 / 1,346 total  (100.0% coverage per epoch, full dataset seen every ~1 epochs)
+ Epoch   trainLoss    baseLoss    monoLoss     valLoss    valMAE         LR      sps     time
+----------------------------------------------------------------------------------------------------
+     2      0.0042      0.0042      0.0000      0.0064      7.69   5.00e-04      132   325.2s   
+     3      0.0039      0.0039      0.0000      0.0070      8.00   5.00e-04      133   323.0s   
+     4      0.0037      0.0037      0.0000      0.0062      7.29   4.99e-04      133   323.0s  *
+           -> checkpoint saved  val_MAE=7.29 BIS
+     5      0.0036      0.0036      0.0000      0.0070      7.85   4.99e-04      133   323.2s   
+     6      0.0035      0.0035      0.0000      0.0074      7.98   4.99e-04      133   323.5s   
+     7      0.0034      0.0034      0.0000      0.0098      9.63   4.98e-04      133   322.6s   
+     8      0.0034      0.0034      0.0000      0.0084      8.83   4.98e-04      132   325.3s   
+     9      0.0033      0.0033      0.0000      0.0085      8.70   4.97e-04      132   326.3s   

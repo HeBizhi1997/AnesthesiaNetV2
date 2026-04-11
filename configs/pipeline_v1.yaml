@@ -1,0 +1,93 @@
+# EEG Preprocessing Pipeline Configuration v1
+# Used for both training and inference to ensure consistency
+
+eeg:
+  channels: ["BIS/EEG1_WAV", "BIS/EEG2_WAV"]
+  srate: 128          # Hz, native rate of BIS monitor
+
+labels:
+  tracks: ["BIS/BIS", "BIS/SQI", "BIS/SR"]
+  target: "BIS/BIS"
+  sqi_track: "BIS/SQI"
+  sr_track: "BIS/SR"   # Suppression Ratio for burst suppression
+
+windowing:
+  window_sec: 4        # seconds per window → 512 samples at 128Hz
+  stride_sec: 1        # stride → 1 second
+  # BIS monitor has ~15-20s internal processing delay (long-window FFT + bispectrum).
+  # We shift the label forward by this amount so the EEG window reflects
+  # the true brain state that corresponds to the displayed BIS value.
+  # i.e., label at time t is paired with EEG from [t - lag - window, t - lag].
+  label_lag_sec: 15    # seconds BIS lags behind the actual EEG state
+  min_valid_label: 10  # discard windows with BIS < 10 (device not ready)
+  max_valid_label: 100
+  # Baseline window: first N seconds used for per-patient amplitude normalisation.
+  # Should correspond to awake/pre-induction period.
+  baseline_sec: 60
+
+sqi:
+  min_score: 0.5       # below this → LNN enters "lazy" mode
+  kurtosis_thresh: 5.0
+  high_freq_ratio_thresh: 0.4  # fraction of power above 50Hz
+
+filters:
+  median_kernel_ms: 20   # ~3 samples at 128Hz → spike removal
+  highpass_hz: 0.5
+  lowpass_hz: 47.0       # stay below 50Hz power line
+  notch_hz: [50.0]       # power line
+  notch_q: 30.0
+
+wavelet:
+  wavelet: "db4"
+  level: 5
+  esu_energy_thresh: 3.0   # std-deviations above baseline → ESU detected
+
+features:
+  bands:                   # relative band power
+    delta: [0.5, 4.0]
+    theta: [4.0, 8.0]
+    alpha: [8.0, 13.0]
+    beta:  [13.0, 30.0]
+    gamma: [30.0, 47.0]
+  permutation_entropy:
+    order: 6
+    delay: 1
+  sef95: true              # spectral edge frequency at 95%
+  lzc: true                # Lempel-Ziv complexity
+  bsr: true
+  # Multi-threshold BSR: fraction of samples below each amplitude threshold.
+  # Catches burst suppression even when ESU residuals raise the noise floor.
+  bsr_thresholds_uv: [2.0, 5.0, 10.0]
+  bsr_window_sec: 4
+
+model:
+  cnn_channels: [32, 64, 128]
+  cnn_kernel: 7
+  # feature_dim: 2ch × (5 bands + PE + SEF + LZC + 3×BSR) = 2×11 + 2 inter = 24
+  feature_dim: 24
+  lnn_units: 64
+  lnn_sparsity: 0.5
+  output_range: [0, 100]
+
+training:
+  batch_size: 256         # reduced to allow seq_len > 1 in SequenceDataset
+  seq_len: 10            # LNN temporal context: 10 consecutive 1-second windows
+  lr: 1.0e-3
+  epochs: 200
+  patience: 20
+  # Cap batches per epoch so each epoch ≈ 5 min instead of 73 min.
+  # At 3200 sps: 4000 batches × 256 = 1.02M samples/epoch, still 7% of full dataset.
+  # Full dataset is seen every ~14 epochs (systematic coverage with shuffle).
+  steps_per_epoch: 4000
+  lambda_monotonic: 0.3
+  lambda_physio: 0.0     # retired: SQI weighting is now inside L_base (see loss.py)
+  noise_std: 0.05        # P3 fix: 0.5 would drown the MAD-normalised signal
+  val_split: 0.15
+  test_split: 0.1
+  seed: 42
+
+paths:
+  raw_data: "raw_data"
+  preprocessed: "outputs/preprocessed"
+  checkpoints: "outputs/checkpoints"
+  logs: "outputs/logs"

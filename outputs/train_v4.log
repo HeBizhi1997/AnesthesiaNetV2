@@ -1,0 +1,47 @@
+Model parameters: 5,452,641
+torch.compile disabled (Triton not supported on Windows)
+Case filter (BIS std p10-p90, 7.8-16.7): kept 1399/1749 (removed 350)
+Patient split — train: 1051, val: 209, test: 139
+Loading dataset into RAM (cache_in_memory=True)…
+  train sequences: 34,089, val: 7,196, test: 4,445
+Patient split — train: 1313, val: 262, test: 174
+Loading dataset into RAM (cache_in_memory=True)…
+  train sequences: 13,982,339, val: 2,904,079, test: 1,827,114
+Val dataset rebuilt with seq_len=10 for speed
+DataLoader workers: 0 (cache in RAM)
+AMP enabled: torch.bfloat16
+
+Training on cuda  |  AMP=True (torch.bfloat16)
+Epochs=200  patience=40  lr=1.00e-04  batch=32
+steps/epoch=1,066 / 1,066 total  (100.0% coverage per epoch, full dataset seen every ~1 epochs)
+ Epoch   trainLoss    baseLoss    monoLoss     valLoss    valMAE         LR      sps     time
+----------------------------------------------------------------------------------------------------
+     1      0.0053      0.0052      0.0000      0.0065      8.64   1.00e-04      139   245.3s  *
+           -> checkpoint saved  val_MAE=8.64 BIS
+     2      0.0044      0.0044      0.0000      0.0067      9.11   1.00e-04      141   242.4s   
+     3      0.0040      0.0040      0.0000      0.0061      8.01   9.99e-05      140   242.9s  *
+           -> checkpoint saved  val_MAE=8.01 BIS
+     4      0.0037      0.0037      0.0000      0.0067      8.25   9.99e-05      140   243.3s   
+     5      0.0036      0.0036      0.0000      0.0066      8.00   9.98e-05      139   245.2s   
+     6      0.0034      0.0034      0.0000      0.0064      7.70   9.98e-05      139   245.3s   
+     7      0.0034      0.0034      0.0000      0.0059      7.34   9.97e-05      140   243.2s  *
+           -> checkpoint saved  val_MAE=7.34 BIS
+     8      0.0033      0.0032      0.0000      0.0065      7.62   9.96e-05      141   242.4s   
+     9      0.0032      0.0032      0.0000      0.0064      7.60   9.95e-05      140   242.8s   
+    10      0.0031      0.0031      0.0000      0.0059      7.37   9.94e-05      140   242.7s   
+         [timing] data=182.0s  fwd=22.5s  bwd=5.5s
+    11      0.0031      0.0031      0.0000      0.0064      7.51   9.93e-05      140   242.8s   
+    12      0.0030      0.0030      0.0000      0.0064      7.48   9.91e-05      140   243.7s   
+    13      0.0030      0.0030      0.0000      0.0071      7.83   9.90e-05      140   243.9s   
+    14      0.0030      0.0029      0.0000      0.0070      7.73   9.88e-05      140   244.2s   
+    15      0.0029      0.0029      0.0000      0.0078      8.29   9.86e-05      138   246.9s   
+    16      0.0029      0.0029      0.0000      0.0071      7.67   9.84e-05      137   248.7s   
+    17      0.0028      0.0028      0.0000      0.0076      8.07   9.82e-05      139   244.6s   
+    18      0.0028      0.0028      0.0000      0.0075      7.91   9.80e-05      139   246.1s   
+    19      0.0027      0.0027      0.0000      0.0070      7.66   9.78e-05      134   255.1s   
+    20      0.0027      0.0027      0.0000      0.0076      7.89   9.76e-05      139   246.0s   
+         [timing] data=185.0s  fwd=22.6s  bwd=5.6s
+    21      0.0027      0.0026      0.0000      0.0077      8.00   9.73e-05      137   249.0s   
+    22      0.0026      0.0026      0.0000      0.0080      8.36   9.71e-05      139   245.8s   
+    23      0.0025      0.0025      0.0000      0.0076      8.06   9.68e-05      137   249.6s   
+    24      0.0025      0.0025      0.0000      0.0074      7.92   9.65e-05      105   325.4s   

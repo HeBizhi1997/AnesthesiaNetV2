@@ -8,15 +8,19 @@ Usage:
     # TBPTT training (v2 config, 5-minute chunks, hidden-state propagation)
     python scripts/train.py --config configs/pipeline_v2.yaml --tbptt
 
+    # MERIDIAN v9 (multi-modal, three-phase curriculum)
+    python scripts/train.py --config configs/pipeline_v9.yaml
+
     # Resume from checkpoint
     python scripts/train.py --config configs/pipeline_v2.yaml --tbptt \\
                             --resume outputs/checkpoints/best_model.pt
 
 Other flags:
-    --data            path to HDF5 dataset
+    --data            path to HDF5 dataset (v3: multimodal HDF5)
     --checkpoint_dir  where to save checkpoints
     --no-amp          disable AMP/BF16
     --compile         force torch.compile (requires Triton, not on Windows by default)
+    --rebuild-mm      force rebuild multimodal annotations in HDF5 (v3 only)
 """
 
 from __future__ import annotations
@@ -44,10 +48,13 @@ import h5py
 from torch.utils.data import DataLoader, WeightedRandomSampler
 
 from src.data.dataset import build_datasets, SequenceDataset
+from src.data.dataset_v3 import build_datasets_v3
 from src.models.anesthesia_net import AnesthesiaNet
 from src.models.anesthesia_net_v2 import AnesthesiaNetV2
+from src.models.anesthesia_net_v3 import AnesthesiaNetV3
 from src.training.trainer import Trainer
 from src.training.trainer_v2 import TrainerV2
+from src.training.trainer_v3 import TrainerV3
 from src.training.tbptt_trainer import TBPTTTrainer, PatientStore
 
 
@@ -79,6 +86,8 @@ def main():
     parser.add_argument("--compile",        action="store_true",
                         help="Force torch.compile even on Windows (requires Triton)")
     parser.add_argument("--no-amp",         action="store_true")
+    parser.add_argument("--rebuild-mm",     action="store_true",
+                        help="Force rebuild multimodal HDF5 annotations (v3 only)")
     args = parser.parse_args()
 
     with open(args.config, "r", encoding="utf-8") as f:
@@ -94,7 +103,9 @@ def main():
 
     # ── Model ─────────────────────────────────────────────────────────────────
     model_version = cfg["training"].get("model_version", "v1")
-    if model_version == "v2":
+    if model_version == "v3":
+        model = AnesthesiaNetV3.from_config(cfg)
+    elif model_version == "v2":
         model = AnesthesiaNetV2.from_config(cfg)
     else:
         model = AnesthesiaNet.from_config(cfg)
@@ -123,8 +134,72 @@ def main():
         except Exception as e:
             print(f"torch.compile failed ({e}), falling back to eager mode")
 
+    # ── V3 multi-modal path ───────────────────────────────────────────────────
+    if model_version == "v3":
+        tcfg = cfg["training"]
+        # Determine multimodal HDF5 path: CLI --data overrides config
+        mm_h5 = args.data
+        if mm_h5 == "outputs/preprocessed/dataset.h5":
+            # Use v3 path from config if default was not overridden
+            mm_h5 = cfg.get("paths", {}).get(
+                "multimodal_h5", "outputs/preprocessed/dataset_v3.h5")
+        raw_dir = cfg.get("paths", {}).get("raw_data", "raw_data")
+
+        train_ds, val_ds, test_ds = build_datasets_v3(
+            h5_path=mm_h5,
+            raw_data_dir=raw_dir,
+            val_split=tcfg["val_split"],
+            test_split=tcfg["test_split"],
+            seq_len=tcfg["seq_len"],
+            seq_stride=tcfg.get("seq_stride", 150),
+            seed=tcfg["seed"],
+            noise_std=tcfg.get("noise_std", 0.05),
+            cache_in_memory=True,
+            min_seq_std=tcfg.get("min_seq_std", 0.0),
+            case_std_pct_low=tcfg.get("case_std_pct_low", 10.0),
+            case_std_pct_high=tcfg.get("case_std_pct_high", 90.0),
+            transition_boost=tcfg.get("transition_upsample_factor", 0),
+            rebuild_multimodal=getattr(args, "rebuild_mm", False),
+        )
+
+        if hasattr(test_ds, "_cache"):
+            test_ds._cache.clear()
+        del test_ds
+        gc.collect()
+
+        num_workers = 0
+        train_loader = DataLoader(
+            train_ds,
+            batch_size=tcfg["batch_size"],
+            shuffle=True,
+            num_workers=num_workers,
+            pin_memory=True,
+            persistent_workers=False,
+            prefetch_factor=None,
+        )
+        val_loader = DataLoader(
+            val_ds,
+            batch_size=tcfg["batch_size"] * 2,
+            shuffle=False,
+            num_workers=num_workers,
+            pin_memory=True,
+            persistent_workers=False,
+            prefetch_factor=None,
+        )
+        _log(f"V3 DataLoader: train={len(train_ds):,}  val={len(val_ds):,}  "
+             f"workers={num_workers}  h5={mm_h5}", "DATA")
+
+        trainer = TrainerV3(
+            model=model,
+            train_loader=train_loader,
+            val_loader=val_loader,
+            cfg=cfg,
+            checkpoint_dir=args.checkpoint_dir,
+            use_amp=(not args.no_amp),
+        )
+
     # ── TBPTT path ────────────────────────────────────────────────────────────
-    if use_tbptt:
+    elif use_tbptt:
         print(f"\n{'='*60}")
         print("  Mode: TBPTT (hidden-state propagation across 5-min chunks)")
         print(f"  seq_len={cfg['training']['seq_len']}  "

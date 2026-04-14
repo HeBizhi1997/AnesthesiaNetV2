@@ -19,11 +19,24 @@ Estimated runtime:
   Parallel   (new): ceil(75/16) × ~2 s = ~10 s  (wall-clock)
 
 Usage:
+    # Standard EEG preprocessing (v1–v8)
     python scripts/preprocess_data.py
     python scripts/preprocess_data.py --config configs/pipeline_v1.yaml
                                        --raw_dir raw_data
                                        --out outputs/preprocessed/dataset.h5
                                        --workers 16
+
+    # v9 MERIDIAN: EEG preprocessing + multimodal annotation (drug/vitals/stim)
+    python scripts/preprocess_data.py --config configs/pipeline_v9.yaml --v3
+    python scripts/preprocess_data.py --config configs/pipeline_v9.yaml --v3
+                                       --out outputs/preprocessed/dataset.h5
+                                       --v3-h5 outputs/preprocessed/dataset_v3.h5
+
+    # Only run multimodal annotation on an existing HDF5 (skip EEG reprocessing)
+    python scripts/preprocess_data.py --config configs/pipeline_v9.yaml
+                                       --v3-only
+                                       --out outputs/preprocessed/dataset.h5
+                                       --v3-h5 outputs/preprocessed/dataset_v3.h5
 """
 
 from __future__ import annotations
@@ -45,6 +58,7 @@ from tqdm import tqdm
 
 from src.data.loader import VitalLoader, load_config
 from src.pipeline.validator import PipelineValidator
+from src.data.dataset_v3 import build_multimodal_hdf5
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -121,12 +135,41 @@ def main():
                         help="Run dataset validation after preprocessing")
     parser.add_argument("--overwrite", action="store_true", default=False,
                         help="Reprocess cases already in the output HDF5")
+    # v3 MERIDIAN multimodal annotation
+    parser.add_argument("--v3", action="store_true", default=False,
+                        help="After EEG preprocessing, add multimodal annotations "
+                             "(drug CE / vitals / stim_cv) to a v3 HDF5 copy")
+    parser.add_argument("--v3-h5", default=None,
+                        help="Output path for the multimodal HDF5. Defaults to "
+                             "paths.multimodal_h5 in config, or dataset_v3.h5")
+    parser.add_argument("--v3-only", action="store_true", default=False,
+                        help="Skip EEG preprocessing; only run multimodal annotation "
+                             "on an existing HDF5 (--out must already exist)")
     args = parser.parse_args()
+
+    # Auto-enable v3 when using a v3 config
+    if not args.v3 and not args.v3_only:
+        import yaml as _yaml_probe
+        with open(args.config, "r", encoding="utf-8") as _f:
+            _cfg_probe = _yaml_probe.safe_load(_f)
+        if _cfg_probe.get("training", {}).get("model_version") == "v3":
+            args.v3 = True
+            print("[INFO] Detected model_version=v3 in config — enabling --v3 automatically")
 
     cfg = load_config(args.config)
     raw_dir  = Path(args.raw_dir)
     out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # --v3-only: skip EEG preprocessing, jump straight to multimodal annotation
+    if args.v3_only:
+        if not out_path.exists():
+            print(f"ERROR: --v3-only requires an existing HDF5 at {out_path}")
+            sys.exit(1)
+        print(f"--v3-only mode: skipping EEG preprocessing, "
+              f"annotating existing HDF5 at {out_path}")
+        _run_v3_annotation(args, cfg, out_path)
+        return
 
     vital_files = sorted(raw_dir.glob("*.vital"))
     print(f"Found {len(vital_files)} .vital files in {raw_dir}")
@@ -217,6 +260,51 @@ def main():
         print("\nRunning dataset validation...")
         validator = PipelineValidator.from_config(cfg, hard_fail=False)
         validator.validate_dataset(str(out_path), n_sample_per_case=3, verbose=True)
+
+    # ── V3 multimodal annotation ──────────────────────────────────────────
+    if args.v3 or args.v3_only:
+        _run_v3_annotation(args, cfg, out_path)
+
+
+def _run_v3_annotation(args, cfg: dict, base_h5: Path) -> None:
+    """
+    构建 MERIDIAN-v9 多模态 HDF5 注释。
+
+    流程：
+      1. 确定 v3 HDF5 路径（参数 > 配置 > 默认）
+      2. 如果 v3 HDF5 不存在或与 base_h5 不同，复制 base_h5 → v3 HDF5
+      3. 调用 build_multimodal_hdf5() 添加药物/心血管刺激/生命体征标注
+    """
+    import shutil
+
+    # 确定 v3 HDF5 输出路径 (argparse converts --v3-h5 → args.v3_h5)
+    v3_h5_str = getattr(args, "v3_h5", None)
+    if not v3_h5_str:
+        v3_h5_str = cfg.get("paths", {}).get(
+            "multimodal_h5",
+            str(base_h5.parent / "dataset_v3.h5"),
+        )
+    v3_h5 = Path(v3_h5_str)
+    v3_h5.parent.mkdir(parents=True, exist_ok=True)
+
+    raw_dir = getattr(args, "raw_dir", "raw_data")
+
+    # 复制 base_h5 → v3_h5（幂等：如果 v3_h5 已存在则跳过复制）
+    if str(v3_h5.resolve()) != str(base_h5.resolve()):
+        if not v3_h5.exists():
+            print(f"\nCopying {base_h5} → {v3_h5} ...")
+            t_copy = time.time()
+            shutil.copy2(str(base_h5), str(v3_h5))
+            print(f"Copy done in {time.time()-t_copy:.1f}s")
+        else:
+            print(f"\nV3 HDF5 already exists at {v3_h5} (skipping copy)")
+
+    # 添加多模态注释（build_multimodal_hdf5 是幂等的）
+    print(f"\nRunning multimodal annotation on {v3_h5}")
+    t_mm = time.time()
+    build_multimodal_hdf5(str(v3_h5), raw_dir, verbose=True)
+    print(f"Multimodal annotation done in {time.time()-t_mm:.1f}s ({(time.time()-t_mm)/60:.1f} min)")
+    _print_summary(str(v3_h5))
 
 
 def _print_summary(out_path: str) -> None:

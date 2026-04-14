@@ -39,6 +39,7 @@ from src.pipeline.steps.filters import recording_filter
 from src.data.batch_processor import BatchProcessor
 from src.models.anesthesia_net import AnesthesiaNet
 from src.models.anesthesia_net_v2 import AnesthesiaNetV2
+from src.models.anesthesia_net_v3 import AnesthesiaNetV3
 from src.data.loader import load_config
 
 
@@ -107,7 +108,10 @@ class InferenceEngine:
             ckpt = torch.load(checkpoint, map_location=self.device, weights_only=False)
             # Detect model version from checkpoint filename or config
             model_ver = cfg.get("training", {}).get("model_version", "v1")
-            if "v2" in str(checkpoint) or model_ver == "v2":
+            if "v3" in str(checkpoint) or model_ver == "v3":
+                self.model = AnesthesiaNetV3.from_config(cfg)
+                self.model_version = "v3"
+            elif "v2" in str(checkpoint) or model_ver == "v2":
                 self.model = AnesthesiaNetV2.from_config(cfg)
                 self.model_version = "v2"
             else:
@@ -117,7 +121,8 @@ class InferenceEngine:
             self.model.eval()
             ep = ckpt.get("epoch", "?")
             mae = ckpt.get("val_mae", float("nan"))
-            mv = "V2 (multi-task)" if self.model_version == "v2" else "V1"
+            mv_names = {"v3": "V3 MERIDIAN (multi-modal)", "v2": "V2 (multi-task)", "v1": "V1"}
+            mv = mv_names.get(self.model_version, self.model_version)
             print(f"  Model {mv} loaded: epoch {ep}, val_MAE={mae:.2f} BIS")
         else:
             print("  No checkpoint found -- preprocessing-only mode.")
@@ -333,7 +338,17 @@ class InferenceEngine:
                 ft = torch.from_numpy(feats[i:j]).unsqueeze(0).to(self.device)
                 st = torch.from_numpy(sqis[i:j]).unsqueeze(0).to(self.device)
 
-                if self.model_version == "v2":
+                if self.model_version == "v3":
+                    # v3 returns a dict; drug_ce/vitals are None → EEG-only inference
+                    out = self.model(wt, ft, st, hx=h)
+                    pred_bis_t  = out["pred_bis"]        # (1, actual, 1)
+                    phase_logits = out["phase_logits"]   # (1, actual, 4)
+                    stim_logits  = out["stim_logits"]    # (1, actual, 1)
+                    h = out["h"]
+                    all_preds[i:j] = pred_bis_t[0, :actual, 0].cpu().float().numpy() * 100.0
+                    all_phases[i:j] = phase_logits[0, :actual].argmax(-1).cpu().numpy().astype(np.int8)
+                    all_stim[i:j] = torch.sigmoid(stim_logits[0, :actual, 0]).cpu().float().numpy()
+                elif self.model_version == "v2":
                     pred_bis_t, phase_logits, stim_logits, _corr, h = \
                         self.model(wt, ft, st, hx=h)
                     # pred_bis_t: (1, actual, 1) normalised [0,1]
@@ -350,8 +365,8 @@ class InferenceEngine:
 
         return {
             "pred_bis": all_preds,
-            "phases":   all_phases if self.model_version == "v2" else None,
-            "stim":     all_stim   if self.model_version == "v2" else None,
+            "phases":   all_phases if self.model_version in ("v2", "v3") else None,
+            "stim":     all_stim   if self.model_version in ("v2", "v3") else None,
         }
 
 
@@ -430,7 +445,8 @@ def _subsample(arr, target=4000):
 # HTML report generator
 # ─────────────────────────────────────────────────────────────────────────────
 
-def generate_html(case_id: str, data: dict, stats: dict, out_path: Path) -> None:
+def generate_html(case_id: str, data: dict, stats: dict, out_path: Path,
+                  model_label: str = "MERIDIAN v3") -> None:
     print("  Generating HTML report ...")
 
     # ── JSON payload ──────────────────────────────────────────────────────────
@@ -752,7 +768,7 @@ def generate_html(case_id: str, data: dict, stats: dict, out_path: Path) -> None
     <div class="pulse-dot"></div>
     <div>
       <div class="hdr-title">ANESTHESIA DEPTH MONITOR &nbsp;/&nbsp; {case_id}</div>
-      <div class="hdr-sub">AnesthesiaNet &middot; GRU-LNN &middot; Multi-task v2 &middot; Inference Report</div>
+      <div class="hdr-sub">AnesthesiaNet &middot; GRU-LNN &middot; {model_label} &middot; Inference Report</div>
     </div>
   </div>
   <div class="hdr-stats" id="hdr-stats"></div>
@@ -1654,8 +1670,9 @@ showSection('sec-bis');
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _find_best_checkpoint() -> tuple[str | None, str | None]:
-    """Auto-detect best checkpoint and its config in priority order v6>v5>v4>v2>v1."""
+    """Auto-detect best checkpoint and its config in priority order v9>v6>v5>v4>v2>v1."""
     candidates = [
+        ("outputs/checkpoints/v9/best_model_v3.pt", "configs/pipeline_v9.yaml"),
         ("outputs/checkpoints/v6/best_model_v2.pt", "configs/pipeline_v6.yaml"),
         ("outputs/checkpoints/v5/best_model_v2.pt", "configs/pipeline_v5.yaml"),
         ("outputs/checkpoints/v4/best_model.pt",    "configs/pipeline_v4.yaml"),
@@ -1667,7 +1684,7 @@ def _find_best_checkpoint() -> tuple[str | None, str | None]:
     for ckpt, cfg_path in candidates:
         if Path(ckpt).exists():
             return ckpt, cfg_path
-    return None, "configs/pipeline_v6.yaml"
+    return None, "configs/pipeline_v9.yaml"
 
 
 def main():
@@ -1759,6 +1776,8 @@ def main():
     print(f"{'-'*50}\n")
 
     # 8. HTML report
+    mv_labels = {"v3": "MERIDIAN v3 (multi-modal)", "v2": "Multi-task v2", "v1": "V1"}
+    model_label = mv_labels.get(engine.model_version, engine.model_version)
     generate_html(
         case_id=case_id,
         data={
@@ -1774,6 +1793,7 @@ def main():
         },
         stats=stats,
         out_path=out_path,
+        model_label=model_label,
     )
     print(f"Done.  Open in browser: file:///{out_path.resolve()}")
 

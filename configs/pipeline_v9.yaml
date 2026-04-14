@@ -1,0 +1,171 @@
+# EEG Pipeline Configuration v9 — MERIDIAN (AnesthesiaNetV3)
+#
+# 相比 v8 的核心升级：
+#   训练时：EEG + 药物浓度 (drug_ce, 6维) + 生命体征 (vitals, 5维)
+#   推理时：仅 EEG（与 v2/v8 接口完全兼容）
+#
+# 新增模块：
+#   - PKEncoder      : 药代动力学时序编码器（训练专用教师网络）
+#   - VitalEncoder   : 生命体征快照编码器（训练专用教师网络）
+#   - PKDHead        : 数据驱动 MLP，从 h_pk 直接预测 BIS（学习个体化 CE50）
+#   - CrossModalDistillation: BYOL 风格跨模态蒸馏（EEG ↔ PK，EEG ↔ Vitals）
+#
+# 三阶段课程学习：
+#   Phase 1 (ep 1-30)  : L_bis + L_phase（建立 EEG 基础）
+#   Phase 2 (ep 31-60) : + L_stim（加入 CV 标签刺激检测）
+#   Phase 3 (ep 61-200): + L_pkd + L_distill + L_trans（多模态医学理解）
+#
+# 理论文档：doc/MERIDIAN_v9_theory.md
+
+eeg:
+  channels: ["BIS/EEG1_WAV", "BIS/EEG2_WAV"]
+  srate: 128
+
+labels:
+  tracks: ["BIS/BIS", "BIS/SQI", "BIS/SR"]
+  target: "BIS/BIS"
+  sqi_track: "BIS/SQI"
+  sr_track: "BIS/SR"
+
+windowing:
+  window_sec: 4
+  stride_sec: 1
+  label_lag_sec: 15
+  min_valid_label: 10
+  max_valid_label: 100
+  baseline_sec: 60
+
+normalization:
+  use_band_ratio: true
+  delta_dominance_thresh: 0.90
+  alpha_beta_band_hz: [8.0, 30.0]
+
+sqi:
+  min_score: 0.5
+  kurtosis_thresh: 5.0
+  high_freq_ratio_thresh: 0.4
+
+filters:
+  median_kernel_ms: 20
+  highpass_hz: 0.5
+  lowpass_hz: 47.0
+  notch_hz: [60.0]
+  notch_q: 30.0
+
+wavelet:
+  wavelet: "db4"
+  level: 5
+  esu_energy_thresh: 3.0
+
+features:
+  bands:
+    delta: [0.5, 4.0]
+    theta: [4.0, 8.0]
+    alpha: [8.0, 13.0]
+    beta:  [13.0, 30.0]
+    gamma: [30.0, 47.0]
+  permutation_entropy:
+    order: 6
+    delay: 1
+  sef95: true
+  lzc: true
+  bsr: true
+  bsr_thresholds_uv: [2.0, 5.0, 10.0]
+  bsr_window_sec: 4
+  pac: false
+
+model:
+  # ── EEG 编码器参数（与 v8 相同）──────────────────────────────────────────
+  cnn_channels: [32, 64, 128]
+  cnn_kernel: 7
+  feature_dim: 24
+  d_model: 128
+  gru_layers: 2
+  gru_dropout: 0.15
+  lnn_backend: "gru"
+  sqi_inertia_threshold: 0.5
+  bsr_layer: true
+  grad_checkpoint: true
+
+  # ── v9 新增：多模态教师网络参数 ──────────────────────────────────────────
+  # PKEncoder: 药代动力学 GRU 编码器
+  pk_hidden: 64          # PK 编码隐维度 = d_pk = 64
+  # VitalEncoder: 生命体征 MLP 编码器
+  vital_hidden: 64       # Vital 编码隐维度 = d_v = 64
+  # CrossModalDistillation: 蒸馏投影空间维度
+  d_proj: 64
+
+training:
+  model_version: "v3"
+
+  # ── 序列参数 ──────────────────────────────────────────────────────────────
+  seq_len: 300
+  seq_stride: 150
+
+  # ── 数据质量过滤 ──────────────────────────────────────────────────────────
+  case_std_pct_low: 10
+  case_std_pct_high: 90
+  min_seq_std: 0.0
+  balance_bis: false
+
+  # ── 三阶段课程学习控制 ────────────────────────────────────────────────────
+  # Phase 1: 建立 EEG→BIS 基础（不激活 stim/distill）
+  # Phase 2: 引入 CV 刺激标签
+  # Phase 3: 全量多模态损失
+  phase2_start_epoch: 31
+  phase3_start_epoch: 61
+
+  # ── 损失函数权重（理论文档 §4.2，每项均有医学依据）─────────────────────────
+  # 主任务（EEG only）
+  lambda_bis:   1.0   # 基准主任务
+  lambda_phase: 0.3   # 相位标签边界模糊，不宜过强（理论 §4.2）
+  lambda_stim:  0.5   # 新 CV 标签质量高，可加强（理论 §4.2）
+
+  # 辅助任务（Phase 3，固定权重）
+  lambda_pkd:           0.4    # 辅助头需要足够梯度学个体化 CE50（理论 §4.2）
+  lambda_distill_pk:    0.2    # 蒸馏是正则化，须 < λ_bis（理论 §4.2）
+  lambda_distill_vital: 0.2    # 同上（vital 蒸馏信号质量略低于 PK）
+  lambda_trans:         0.3    # CE 方向约束，替代旧 L_mono（理论 §4.2）
+
+  # 过渡期加权：高 ce_velocity 时步的 L_pkd/L_trans 放大倍数
+  transition_boost: 2.0        # 过渡期权重 = 1 + (boost-1) * (vel > threshold)
+  vel_threshold:    0.2        # ce_velocity 显著过渡期阈值
+
+  # ── 刺激检测损失参数（v8 修复：focal_alpha=0.5 而非 0.99）─────────────────
+  focal_alpha:     0.5         # 对称权重（避免过度上调正例梯度）
+  stim_pos_weight: 15.0        # sqrt(144:1) 近似，与 alpha=0.5 联合使用
+  focal_gamma:     2.0
+
+  # ── 自适应权重（主任务 UW-SO，辅助任务用固定 λ）──────────────────────────
+  use_auto_weight:  false
+  auto_weight_temp: 0.5
+
+  # ── 过渡期过采样（替代 v8 的 induction_boost）────────────────────────────
+  # ce_velocity 加权通过 loss 内部实现，不再需要数据集级 induction_boost
+  transition_upsample_factor: 2  # dataset_v3.boost_transition_sequences() 参数
+
+  # ── 优化器 ───────────────────────────────────────────────────────────────
+  batch_size: 32
+  lr: 1.0e-4
+  epochs: 200
+  patience: 40
+  noise_std: 0.05
+  val_split: 0.15
+  test_split: 0.1
+  seed: 42
+
+  steps_per_epoch: null
+
+  # ── Huber delta（BIS 归一化单位）────────────────────────────────────────────
+  # 用于 L_bis 和 L_pkd（共享参数）
+  # 理论 §2.6 建议 L_pkd 用 δ=5 BIS pts = 0.05（归一化），
+  # 但 0.10（10 BIS pts）对 PKD Head 早期训练更稳定（初始误差大时避免过早截断）
+  huber_delta: 0.10
+
+paths:
+  raw_data: "raw_data"
+  preprocessed: "outputs/preprocessed"
+  checkpoints: "outputs/checkpoints/v9"
+  logs: "outputs/logs/v9"
+  # v9 多模态 HDF5（由 preprocess_data.py 生成）
+  multimodal_h5: "outputs/preprocessed/dataset_v3.h5"

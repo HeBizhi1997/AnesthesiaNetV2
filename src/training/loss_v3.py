@@ -150,6 +150,7 @@ class MultiTaskLossV3(nn.Module):
         lambda_phase:         float = 0.3,   # 理论 §4.2：相位标签误差大，不宜过强
         lambda_stim:          float = 0.5,   # 理论 §4.2：CV 标签质量高，可加强
         lambda_pkd:           float = 0.4,   # 理论 §4.2：辅助头需要足够梯度
+        lambda_vitald:        float = 0.4,   # VitalDHead BIS 预测（修复 v9 VitalEncoder 无梯度缺陷）
         lambda_distill_pk:    float = 0.2,   # 理论 §4.2：蒸馏是正则化，须 < λ_bis
         lambda_distill_vital: float = 0.2,   # 理论 §4.2：同上
         lambda_trans:         float = 0.3,   # 理论 §4.2：CE 方向约束
@@ -161,6 +162,8 @@ class MultiTaskLossV3(nn.Module):
         stim_pos_weight:      float = 99.0,
         phase2_start_epoch:   int   = 31,
         phase3_start_epoch:   int   = 61,
+        stim_warmup_epochs:   int   = 5,    # v10: Phase2切换时 stim 线性热身 epoch 数
+        phase3_warmup_epochs: int   = 5,    # v10: Phase3切换时蒸馏损失线性热身 epoch 数
         use_auto_weight:      bool  = False,
         auto_weight_temp:     float = 0.5,
     ):
@@ -168,7 +171,10 @@ class MultiTaskLossV3(nn.Module):
         self.lambda_bis           = lambda_bis
         self.lambda_phase         = lambda_phase
         self.lambda_stim          = lambda_stim
+        self.stim_warmup_epochs   = stim_warmup_epochs
+        self.phase3_warmup_epochs = phase3_warmup_epochs
         self.lambda_pkd           = lambda_pkd
+        self.lambda_vitald        = lambda_vitald
         self.lambda_distill_pk    = lambda_distill_pk
         self.lambda_distill_vital = lambda_distill_vital
         self.lambda_trans         = lambda_trans
@@ -209,10 +215,12 @@ class MultiTaskLossV3(nn.Module):
         epoch:        int = 1,
         # Phase 3 附加项（均为可选，仅 Phase 3 提供）
         bis_pkd:      Optional[torch.Tensor] = None,  # (B,T,1) PK 辅助 BIS
+        bis_vitald:   Optional[torch.Tensor] = None,  # (B,T,1) Vital 辅助 BIS（v3 fix）
         loss_distill_pk:    Optional[torch.Tensor] = None,  # 标量
         loss_distill_vital: Optional[torch.Tensor] = None,  # 标量
         drug_ce:      Optional[torch.Tensor] = None,  # (B,T,6) 用于 L_trans
         mask_drug:    Optional[torch.Tensor] = None,  # (B,T)
+        mask_vital:   Optional[torch.Tensor] = None,  # (B,T) Vital 数据可用性
         ce_velocity:  Optional[torch.Tensor] = None,  # (B,T)
     ) -> dict[str, torch.Tensor]:
         """
@@ -239,7 +247,15 @@ class MultiTaskLossV3(nn.Module):
             weight=self.phase_weights.to(ph_logits_flat.device),
         )
 
-        # ── 3. L_stim：Focal 损失 (Phase 2+) ────────────────────────────────
+        # ── 3. L_stim：Focal 损失 (Phase 2+，线性热身) ───────────────────────
+        # v10: stim 在 Phase 2 开始时线性从 0 升到 lambda_stim（防止阶跃激活冲击 BIS 头）
+        # ep31: ramp=0/5=0  ep32: 0.2  ep33: 0.4  ep34: 0.6  ep35: 0.8  ep36+: 1.0
+        stim_ramp = 1.0
+        if cur_phase == 2 and self.stim_warmup_epochs > 0:
+            epochs_into_ph2 = epoch - self.phase2_start_epoch   # 0 at first Phase2 epoch
+            stim_ramp = min(1.0, epochs_into_ph2 / self.stim_warmup_epochs)
+        effective_lambda_stim = self.lambda_stim * stim_ramp
+
         stim_err = focal_loss(
             stim_logits.view(-1),
             stim_labels.view(-1),
@@ -256,7 +272,7 @@ class MultiTaskLossV3(nn.Module):
             else:
                 lambdas = [self.lambda_bis, self.lambda_phase]
                 if cur_phase >= 2:
-                    lambdas.append(self.lambda_stim)
+                    lambdas.append(effective_lambda_stim)  # 使用热身后的权重
                 total = sum(l * e for l, e in zip(lambdas, main_losses))
 
             return {
@@ -273,7 +289,7 @@ class MultiTaskLossV3(nn.Module):
 
         # ── Phase 3：附加多模态损失 ───────────────────────────────────────────
 
-        # 4. L_pkd：遮掩 Huber（PK 辅助 BIS）
+        # 4a. L_pkd：遮掩 Huber（PK 辅助 BIS）
         pkd_err = pred_bis.new_zeros(1).squeeze()
         if bis_pkd is not None and mask_drug is not None:
             # ce_velocity 加权：过渡期更重要
@@ -288,6 +304,12 @@ class MultiTaskLossV3(nn.Module):
                 weighted_mask = mask_drug.float()
             pkd_err = masked_huber_loss(
                 bis_pkd, label_bis, weighted_mask, self.huber_delta)
+
+        # 4b. L_vitald：遮掩 Huber（Vital 辅助 BIS，修复 VitalEncoder 无梯度问题）
+        vitald_err = pred_bis.new_zeros(1).squeeze()
+        if bis_vitald is not None and mask_vital is not None:
+            vitald_err = masked_huber_loss(
+                bis_vitald, label_bis, mask_vital.float(), self.huber_delta)
 
         # 5. L_distill：来自 model.forward()，直接使用
         distill_pk_err    = loss_distill_pk    if loss_distill_pk    is not None \
@@ -306,7 +328,14 @@ class MultiTaskLossV3(nn.Module):
                 pred_bis, ce_eq_n, ce_vel, mask_drug, self.vel_threshold)
 
         # ── Phase 3 总损失 ────────────────────────────────────────────────────
-        # 主任务（UW-SO 可选） + 辅助任务（固定 λ）
+        # 辅助损失同样线性热身（防止 Phase 3 开始时蒸馏损失冲击 BIS 头，类似 stim warmup）
+        # v9 Phase 3 ep61: dv=0.73 立即全量激活 → BIS 回归被噪声梯度淹没
+        ph3_ramp = 1.0
+        if self.phase3_warmup_epochs > 0:
+            epochs_into_ph3 = epoch - self.phase3_start_epoch   # 0 at first Phase3 epoch
+            ph3_ramp = min(1.0, epochs_into_ph3 / self.phase3_warmup_epochs)
+
+        # 主任务（UW-SO 可选） + 辅助任务（固定 λ，带热身）
         main_losses = [bis_err, phase_err, stim_err]
         if self.use_auto_weight:
             main_total = self._auto_weighted_sum(main_losses)
@@ -315,8 +344,9 @@ class MultiTaskLossV3(nn.Module):
                           self.lambda_phase * phase_err +
                           self.lambda_stim  * stim_err)
 
-        aux_total = (
+        aux_total = ph3_ramp * (
             self.lambda_pkd           * pkd_err          +
+            self.lambda_vitald        * vitald_err        +
             self.lambda_distill_pk    * distill_pk_err   +
             self.lambda_distill_vital * distill_vital_err +
             self.lambda_trans         * trans_err
@@ -329,6 +359,7 @@ class MultiTaskLossV3(nn.Module):
             "phase_loss":    phase_err.detach(),
             "stim_loss":     stim_err.detach(),
             "pkd_loss":      pkd_err.detach(),
+            "vitald_loss":   vitald_err.detach(),
             "distill_pk":    distill_pk_err.detach(),
             "distill_vital": distill_vital_err.detach(),
             "trans_loss":    trans_err.detach(),

@@ -95,6 +95,31 @@ class PKDHead(nn.Module):
         return self.net(h_pk)
 
 
+class VitalDHead(nn.Module):
+    """
+    Vitals 辅助回归头（训练时教师侧，与 PKDHead 对称设计）。
+
+    从 h_vital（生命体征编码）直接预测 BIS，赋予 VitalEncoder 梯度信号。
+    临床依据：MAP/HR 与麻醉深度存在非线性相关（低 BIS → 低 MAP/HR）。
+
+    修复 v9 的设计缺陷：VitalEncoder 在 v9 中无任何损失直接督导，
+    导致 h_vital 保持随机初始化，wDV 占 Phase 3 损失 69% 为噪声。
+    """
+
+    def __init__(self, d_vital: int):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(d_vital, 32),
+            nn.GELU(),
+            nn.Linear(32, 1),
+            nn.Sigmoid(),
+        )
+
+    def forward(self, h_vital: torch.Tensor) -> torch.Tensor:
+        """h_vital:(B,T,d_vital) → bis_vitald:(B,T,1) ∈ [0,1]"""
+        return self.net(h_vital)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 主模型
 # ─────────────────────────────────────────────────────────────────────────────
@@ -182,9 +207,10 @@ class AnesthesiaNetV3(nn.Module):
         self.bis_head = PhaseGatedBISHead(d_model, self.N_PHASES)
 
         # ── v3 新增：多模态教师网络（训练时使用，推理时忽略）──────────────
-        self.pk_enc    = PKEncoder(in_dim=6, hidden=pk_hidden, d_pk=pk_hidden)
-        self.vital_enc = VitalEncoder(in_dim=5, hidden=vital_hidden, d_v=vital_hidden)
-        self.pkd_head  = PKDHead(d_pk=pk_hidden)
+        self.pk_enc     = PKEncoder(in_dim=6, hidden=pk_hidden, d_pk=pk_hidden)
+        self.vital_enc  = VitalEncoder(in_dim=5, hidden=vital_hidden, d_v=vital_hidden)
+        self.pkd_head   = PKDHead(d_pk=pk_hidden)
+        self.vitald_head = VitalDHead(d_vital=vital_hidden)   # v3 fix: gives VitalEncoder gradient
 
         self.distill = CrossModalDistillation(
             d_student=d_model,
@@ -236,14 +262,15 @@ class AnesthesiaNetV3(nn.Module):
         # ── 时序模型 ──────────────────────────────────────────────────────
         h_seq, h = self.temporal(seq, hx)                       # (B, T, d_model)
 
-        # SQI 惰性模式（与 v2 相同）
+        # SQI 惰性模式 — 向量化实现（v10 优化，消除 T-1 次 Python→CUDA 同步）
+        # 原理：last_src[b,t] = 最近一个 sqi_ok 为 True 的时步索引
+        # 等价于对 pos_masked = (t if sqi_ok[b,t] else -1) 做 cummax
         if self.sqi_inertia_threshold > 0.0 and T > 1:
-            sqi_ok = (sqi.mean(-1) >= self.sqi_inertia_threshold)
+            sqi_ok = (sqi.mean(-1) >= self.sqi_inertia_threshold)   # (B, T)
             with torch.no_grad():
-                last_src = torch.arange(T, device=h_seq.device).unsqueeze(0).expand(B, -1).clone()
-                for t in range(1, T):
-                    carry = ~sqi_ok[:, t]
-                    last_src[:, t] = torch.where(carry, last_src[:, t - 1], last_src[:, t])
+                pos = torch.arange(T, device=h_seq.device).unsqueeze(0).expand(B, -1)  # (B, T)
+                pos_masked = torch.where(sqi_ok, pos, pos.new_full((), -1))             # (B, T)
+                last_src = torch.cummax(pos_masked, dim=1).values.clamp(min=0)          # (B, T)
                 idx = last_src.unsqueeze(-1).expand(-1, -1, h_seq.shape[-1])
             h_seq = h_seq.gather(1, idx)
 
@@ -267,7 +294,10 @@ class AnesthesiaNetV3(nn.Module):
             out["bis_pkd"] = bis_pkd
 
             if vitals is not None:
-                h_vital = self.vital_enc(vitals)                # (B, T, d_vital)
+                h_vital    = self.vital_enc(vitals)             # (B, T, d_vital)
+                bis_vitald = self.vitald_head(h_vital)          # (B, T, 1)  ← v3 fix
+                out["bis_vitald"] = bis_vitald
+
                 mask_d  = mask_drug  if mask_drug  is not None else torch.ones(B, T, device=h_seq.device)
                 mask_v  = mask_vital if mask_vital is not None else torch.ones(B, T, device=h_seq.device)
 

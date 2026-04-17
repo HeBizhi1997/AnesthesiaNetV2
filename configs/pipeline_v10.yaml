@@ -1,0 +1,205 @@
+# EEG Pipeline Configuration v10 — MERIDIAN v10
+#
+# v10 升级：在 v9 基础上的五项工程改进
+#
+#   1. PrefetchLoader（已在 scripts/train.py 实现）
+#      — 后台线程预取批次，重叠 CPU 归并与 GPU 计算
+#      — 预期每 epoch 缩短 30-40%（27 min → ~17 min）
+#
+#   2. 多时步验证 + 15步因果滚动均值（已在 trainer_v3.py 实现）
+#      — 取全序列 T 步而非末步计算 vMAE，匹配临床监护仪 15 s 平滑
+#      — 预期 vInd/vRec CV 从 13.7%/20.5% 下降到 5-8%
+#
+#   3. EMA 早停（α=0.3，已在 trainer_v3.py 实现）
+#      — EMA 控制 patience 计数，原始最优控制检查点保存
+#      — 防止单次噪声 epoch 误触发 / 抑制噪声不保存真实最优
+#
+#   4. EMG "毒喂"（poison feeding）
+#      — 把 47-70 Hz（emg_lo）和 70-110 Hz（emg_hi）显式作为特征输入
+#      — 不截断信号（避免信息损失），让模型自己学习 EMG 污染程度并折扣
+#      — feature_dim 从 24 → 28（每通道多 2 个特征 × 2 通道）
+#
+#   5. VitalDHead 梯度修复（已在 anesthesia_net_v3.py + loss_v3.py 实现）
+#      — VitalEncoder 现在通过 VitalDHead 直接接受 BIS 监督
+#      — lambda_vitald: 0.4（与 lambda_pkd 对称）
+#
+# 三阶段课程学习：与 v9 相同（Phase 1/2/3 边界不变）
+# 理论文档：doc/MERIDIAN_v10_theory.md（待补充）
+
+eeg:
+  channels: ["BIS/EEG1_WAV", "BIS/EEG2_WAV"]
+  srate: 128
+
+labels:
+  tracks: ["BIS/BIS", "BIS/SQI", "BIS/SR"]
+  target: "BIS/BIS"
+  sqi_track: "BIS/SQI"
+  sr_track: "BIS/SR"
+
+windowing:
+  window_sec: 4
+  stride_sec: 1
+  label_lag_sec: 15
+  min_valid_label: 10
+  max_valid_label: 100
+  baseline_sec: 60
+
+normalization:
+  use_band_ratio: true
+  delta_dominance_thresh: 0.90
+  alpha_beta_band_hz: [8.0, 30.0]
+
+sqi:
+  min_score: 0.5
+  kurtosis_thresh: 5.0
+  high_freq_ratio_thresh: 0.4
+
+filters:
+  median_kernel_ms: 20
+  highpass_hz: 0.5
+  lowpass_hz: 47.0
+  notch_hz: [60.0]
+  notch_q: 30.0
+
+wavelet:
+  wavelet: "db4"
+  level: 5
+  esu_energy_thresh: 3.0
+
+features:
+  bands:
+    delta: [0.5, 4.0]
+    theta: [4.0, 8.0]
+    alpha: [8.0, 13.0]
+    beta:  [13.0, 30.0]
+    gamma: [30.0, 47.0]
+    # v10 注：emg_lo/emg_hi 已移除
+    # 原因：128 Hz 采样 Nyquist=64 Hz，47 Hz 低通后 47 Hz 以上信号为零，
+    # 直接频段功率无法反映 EMG 污染程度。
+    # 替代方案：用 spectral_slope + gamma_emg_ratio 在低通带宽内算法估计 EMG。
+  permutation_entropy:
+    order: 6
+    delay: 1
+  sef95: true
+  lzc: true
+  bsr: true
+  bsr_thresholds_uv: [2.0, 5.0, 10.0]
+  # v10 EMG 分离算法特征（替代 emg_lo/hi，保持 feature_dim=28）
+  # spectral_slope : 1/f 谱斜率归一化值（0=平坦/EMG，1=陡降/EEG）
+  #   计算范围 1-47 Hz（低通带内），EMG 污染使 gamma 段抬高从而斜率变浅
+  # gamma_emg_ratio: P(30-47 Hz) / [P(30-47) + P(0.5-30 Hz)]
+  #   麻醉下 delta/theta 主导 → 比值低；EMG 污染 gamma → 比值高
+  spectral_slope: false    # requires HDF5 regeneration (dataset_v3.h5 has v9 features)
+  gamma_emg_ratio: false   # same — enable in v11 after rerunning batch_processor
+  pac: false
+
+model:
+  # ── EEG 编码器参数 ───────────────────────────────────────────────────────────
+  cnn_channels: [32, 64, 128]
+  cnn_kernel: 7
+  feature_dim: 24
+  # feature_dim=24 计算（匹配 dataset_v3.h5 预计算特征）：
+  #   5 bands + PE + SEF95 + LZC + BSR×3 = 11/ch
+  #   11 × 2 ch + 2 (alpha_asym + mean_sqi) = 24
+  # 注：spectral_slope + gamma_emg_ratio 需要重新生成 HDF5 后才可用（feature_dim=28）
+  # feat_proj 输入 = feature_dim + n_eeg_channels(SQI) = 24 + 2 = 26
+  d_model: 128
+  gru_layers: 2
+  gru_dropout: 0.15
+  lnn_backend: "gru"
+  sqi_inertia_threshold: 0.5
+  bsr_layer: true
+  grad_checkpoint: true
+
+  # ── 多模态教师网络参数（与 v9 相同） ─────────────────────────────────────────
+  pk_hidden: 64
+  vital_hidden: 64
+  d_proj: 64
+
+training:
+  model_version: "v3"
+
+  # ── 序列参数 ──────────────────────────────────────────────────────────────────
+  seq_len: 300
+  seq_stride: 150
+
+  # ── 数据质量过滤 ──────────────────────────────────────────────────────────────
+  case_std_pct_low: 10
+  case_std_pct_high: 90
+  min_seq_std: 0.0
+  balance_bis: false
+
+  # ── 三阶段课程学习控制 ────────────────────────────────────────────────────────
+  phase2_start_epoch: 31
+  phase3_start_epoch: 61
+
+  # ── 损失函数权重 ──────────────────────────────────────────────────────────────
+  # 主任务
+  # v10 校正（v9 根因分析）：
+  #   v9 Phase 2: lambda_phase=0.3 × phase_loss=0.63 = 0.189 vs lambda_bis × bis_loss=0.005
+  #     → 相位梯度 38:1 于 BIS，BIS ep1-60 完全无法学习（train_bis=0.0018 零进展）
+  #   v9 Phase 3: lambda_vitald=0.4 × dv=0.73 = 0.292 vs lambda_bis × bis_loss=0.0015
+  #     → distill_vital 梯度 195:1 于 BIS，45 epoch 无进展（ep65→ep105 plateau）
+  #   修复：大幅削减辅助任务权重，提升 BIS 权重
+  lambda_bis:   2.0   # v9 was 1.0 — doubled to amplify BIS gradient
+  lambda_phase: 0.05  # v9 was 0.3 — reduced 6× to fix 38:1 Phase-2 dominance
+  lambda_stim:  0.5
+
+  # 辅助任务（Phase 3）
+  # v9 root cause: dv=0.73 (constant, never converges) with lambda_vitald=0.4 → 195:1 ratio
+  # Fix: crush vitald to 0.01 so even dv=0.73 contributes only 0.0073 vs BIS 0.003
+  lambda_pkd:           0.3
+  lambda_vitald:        0.01   # v9 was 0.4 — VitalEncoder diverges from EEG space, pure noise
+  lambda_distill_pk:    0.1
+  lambda_distill_vital: 0.02   # v9 was 0.2 — same reason as vitald
+  lambda_trans:         0.3
+
+  transition_boost: 2.0
+  vel_threshold:    0.2
+
+  # ── 刺激检测参数 ──────────────────────────────────────────────────────────────
+  # focal_alpha=0.5 + stim_pos_weight=15 是 v8 Bug 修复后的确认有效参数：
+  #   v8 Bug: pos_weight=99 × alpha=0.99 → 梯度比 9801:1 → sigmoid→0.986 全时步
+  #           导致 StAUC 恒为 0.50，且 stim 校正头污染 BIS 回归（v8 run 1-3 完全失败）
+  #   v8 fix (run 4): 改为 15×0.5=7.5 有效权重 → StAUC=0.518@ep1（确认恢复学习）
+  # 有效正样本权重 = focal_alpha × stim_pos_weight = 0.5 × 15 = 7.5
+  focal_alpha:     0.5
+  stim_pos_weight: 15.0
+  focal_gamma:     2.0
+
+  # ── 自适应权重 ────────────────────────────────────────────────────────────────
+  use_auto_weight:  false
+  auto_weight_temp: 0.5
+
+  # ── 过渡期过采样 ──────────────────────────────────────────────────────────────
+  transition_upsample_factor: 2
+
+  # ── 优化器 ───────────────────────────────────────────────────────────────────
+  batch_size: 32
+  # 注：batch_size 无法增大！CNN 展开 (B×T, n_ch, W) = (32×300, 2, 512) 同时计算
+  # v9 bs=32 已占 VRAM 19GB (59%)；bs=64 → ~38GB OOM；bs=128 → ~76GB (4分钟挂死)
+  # 速度提升来源：SQI 向量化消除 ~1300s/epoch 的 Python→CUDA 同步，不靠 batch 增大
+  lr: 1.0e-4
+  epochs: 200
+  patience: 70   # v9 early stopped ep55 (before Phase3 ep61); 70 ensures we reach Phase3
+  stim_warmup_epochs: 5    # Phase2: stim线性热身（ep31→ep35逐步升到lambda_stim）
+  phase3_warmup_epochs: 5  # Phase3: 蒸馏损失线性热身（防止切换冲击）
+  noise_std: 0.05
+  val_split: 0.15
+  test_split: 0.1
+  seed: 42
+
+  steps_per_epoch: null
+
+  # ── PrefetchLoader 队列深度（v10 新增） ──────────────────────────────────────
+  n_prefetch: 4
+
+  # ── Huber delta ──────────────────────────────────────────────────────────────
+  huber_delta: 0.10
+
+paths:
+  raw_data: "raw_data"
+  preprocessed: "outputs/preprocessed"
+  checkpoints: "outputs/checkpoints/v10"
+  logs: "outputs/logs/v10"
+  multimodal_h5: "outputs/preprocessed/dataset_v3.h5"

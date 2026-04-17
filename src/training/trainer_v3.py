@@ -24,7 +24,7 @@ import sys
 import time
 import datetime
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, IO, Optional
 
 import numpy as np
 import torch
@@ -48,8 +48,18 @@ def _now() -> str:
     return datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
+_LOG_FILE: Optional["IO"] = None   # module-level file handle, set by TrainerV3.__init__
+
+
 def _log(msg: str, tag: str = "INFO") -> None:
-    print(f"[{_now()}][{tag}] {msg}", flush=True)
+    line = f"[{_now()}][{tag}] {msg}"
+    print(line, flush=True)
+    if _LOG_FILE is not None:
+        try:
+            _LOG_FILE.write(line + "\n")
+            _LOG_FILE.flush()
+        except Exception:
+            pass
 
 
 def _fmt_elapsed(seconds: float) -> str:
@@ -84,6 +94,14 @@ def _auroc_numpy(scores: np.ndarray, labels: np.ndarray) -> float:
     return float(np.clip(auc, 0.0, 1.0))
 
 
+def _causal_rolling_mean(arr: np.ndarray, window: int = 15) -> np.ndarray:
+    """15-step causal rolling mean — matches clinical BIS monitor 15 s smoothing delay."""
+    cs = np.concatenate([[0.0], np.cumsum(arr)])
+    idx = np.arange(len(arr))
+    start = np.maximum(0, idx - window + 1)
+    return (cs[idx + 1] - cs[start]) / (idx - start + 1)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 训练器
 # ─────────────────────────────────────────────────────────────────────────────
@@ -105,6 +123,7 @@ class TrainerV3:
         device: Optional[torch.device] = None,
         checkpoint_dir: str = "outputs/checkpoints",
         use_amp: bool = True,
+        log_dir: Optional[str] = None,
     ):
         self.model        = model
         self.train_loader = train_loader
@@ -115,6 +134,15 @@ class TrainerV3:
         self.checkpoint_dir = Path(checkpoint_dir)
         self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
+        # ── 日志文件 ────────────────────────────────────────────────────────
+        global _LOG_FILE
+        if log_dir is not None:
+            _log_dir = Path(log_dir)
+            _log_dir.mkdir(parents=True, exist_ok=True)
+            _log_path = (_log_dir /
+                         f"train_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.log")
+            _LOG_FILE = open(_log_path, "a", encoding="utf-8")
+
         tcfg = cfg["training"]
         self.epochs          = tcfg["epochs"]
         self.patience        = tcfg["patience"]
@@ -122,14 +150,20 @@ class TrainerV3:
 
         self.optimizer = torch.optim.AdamW(
             model.parameters(), lr=tcfg["lr"], weight_decay=1e-4)
-        self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-            self.optimizer, T_max=self.epochs, eta_min=1e-6)
+        # CosineAnnealingWarmRestarts: T_0 aligned with each Phase length (default 30).
+        # Each Phase gets a full LR cycle (lr → eta_min), restarting at Phase boundaries.
+        # e.g. T_0=30: Phase1 ep1-30 decays 1e-4→1e-6; Phase2 ep31 resets to 1e-4.
+        _lr_T0      = tcfg.get("lr_T0", 30)
+        _lr_eta_min = tcfg.get("lr_eta_min", 1e-6)
+        self.scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
+            self.optimizer, T_0=_lr_T0, T_mult=1, eta_min=_lr_eta_min)
 
         self.criterion = MultiTaskLossV3(
             lambda_bis=tcfg.get("lambda_bis", 1.0),
             lambda_phase=tcfg.get("lambda_phase", 0.5),
             lambda_stim=tcfg.get("lambda_stim", 0.3),
             lambda_pkd=tcfg.get("lambda_pkd", 0.3),
+            lambda_vitald=tcfg.get("lambda_vitald", 0.4),
             lambda_distill_pk=tcfg.get("lambda_distill_pk", 0.5),
             lambda_distill_vital=tcfg.get("lambda_distill_vital", 0.3),
             lambda_trans=tcfg.get("lambda_trans", 0.2),
@@ -141,6 +175,8 @@ class TrainerV3:
             stim_pos_weight=tcfg.get("stim_pos_weight", 99.0),
             phase2_start_epoch=tcfg.get("phase2_start_epoch", 31),
             phase3_start_epoch=tcfg.get("phase3_start_epoch", 61),
+            stim_warmup_epochs=tcfg.get("stim_warmup_epochs", 5),
+            phase3_warmup_epochs=tcfg.get("phase3_warmup_epochs", 5),
             use_auto_weight=tcfg.get("use_auto_weight", False),
         )
 
@@ -161,9 +197,14 @@ class TrainerV3:
         self.no_improve    = 0
         self.start_epoch   = 1
 
+        # EMA 早停（α=0.3：防单次异常 epoch 触发早停）
+        self._ema_val_mae     = None
+        self._ema_alpha       = 0.3
+        self.best_val_mae_ema = float("inf")
+
         self.history: Dict[str, list] = {k: [] for k in [
             "train_loss", "train_bis", "train_phase", "train_stim",
-            "train_pkd", "train_distill_pk", "train_distill_vital", "train_trans",
+            "train_pkd", "train_vitald", "train_distill_pk", "train_distill_vital", "train_trans",
             "val_loss", "val_mae", "val_mae_induction", "val_mae_recovery",
             "val_mae_preop", "val_mae_maint",
             "val_phase_acc", "val_stim_auroc",
@@ -181,11 +222,21 @@ class TrainerV3:
             self.best_val_loss = ckpt["val_loss"]
             self.start_epoch   = ckpt["epoch"] + 1
             self.history       = ckpt.get("history", self.history)
-            # 恢复 LR scheduler 状态（需要先 step optimizer）
-            self.optimizer.step()
-            self.optimizer.zero_grad(set_to_none=True)
-            for _ in range(ckpt["epoch"]):
-                self.scheduler.step()
+
+            # 恢复 LR scheduler 状态
+            if "scheduler_state_dict" in ckpt:
+                try:
+                    self.scheduler.load_state_dict(ckpt["scheduler_state_dict"])
+                except (KeyError, ValueError):
+                    # 跨版本检查点（v10 CosineAnnealingLR → v11 WarmRestarts）：
+                    # 状态字典结构不同，无法直接加载；手动 step 到恢复位置。
+                    for i in range(ckpt["epoch"]):
+                        self.scheduler.step(i)
+            else:
+                # 旧版检查点兼容：逐步还原近似状态
+                for i in range(ckpt["epoch"]):
+                    self.scheduler.step(i)
+
             _log(f"Resumed from epoch {ckpt['epoch']}  "
                  f"best_val_MAE={self.best_val_mae:.2f}  "
                  f"val_loss={self.best_val_loss:.4f}", "RESUME")
@@ -210,7 +261,7 @@ class TrainerV3:
 
         accum = {k: 0.0 for k in [
             "loss", "bis_loss", "phase_loss", "stim_loss",
-            "pkd_loss", "distill_pk", "distill_vital", "trans_loss",
+            "pkd_loss", "vitald_loss", "distill_pk", "distill_vital", "trans_loss",
         ]}
         n_batches = 0
         t0 = time.time()
@@ -272,10 +323,12 @@ class TrainerV3:
                     epoch        = epoch,
                     # Phase 3 多模态项
                     bis_pkd             = out.get("bis_pkd"),
+                    bis_vitald          = out.get("bis_vitald"),
                     loss_distill_pk     = out.get("loss_distill_pk"),
                     loss_distill_vital  = out.get("loss_distill_vital"),
                     drug_ce             = drug_ce,
                     mask_drug           = mask_drug,
+                    mask_vital          = mask_vital,
                     ce_velocity         = ce_velocity,
                 )
 
@@ -295,7 +348,8 @@ class TrainerV3:
             sps_acc += bs / max(dt, 1e-6)
 
             for k in accum:
-                accum[k] += losses[k].item()
+                if k in losses:
+                    accum[k] += losses[k].item()
             n_batches += 1
 
             if bar is not None:
@@ -316,6 +370,7 @@ class TrainerV3:
             "train_phase":        accum["phase_loss"]      / n_batches,
             "train_stim":         accum["stim_loss"]       / n_batches,
             "train_pkd":          accum["pkd_loss"]        / n_batches,
+            "train_vitald":       accum["vitald_loss"]     / n_batches,
             "train_distill_pk":   accum["distill_pk"]      / n_batches,
             "train_distill_vital":accum["distill_vital"]   / n_batches,
             "train_trans":        accum["trans_loss"]      / n_batches,
@@ -379,14 +434,19 @@ class TrainerV3:
             total_loss += losses["loss"].item() * bs
             n += bs
 
-            all_pred_bis.append(
-                out["pred_bis"][:, -1, 0].detach().cpu().float().numpy() * 100.0)
-            all_label_bis.append(batch["label_raw"].cpu().numpy())
-            all_phase.append(phase_labels[:, -1].cpu().numpy())
+            # 全时步 BIS 收集 — 每条序列独立做 15 步因果滚动均值（匹配临床监护仪平滑）
+            pred_np  = out["pred_bis"].detach().cpu().float().numpy()  # (B, T, 1)
+            label_np = label_seq.cpu().float().numpy()                 # (B, T) normalized
+            phase_np = phase_labels.cpu().numpy()                      # (B, T)
+            for b_idx in range(pred_np.shape[0]):
+                smoothed = _causal_rolling_mean(pred_np[b_idx, :, 0], window=15) * 100.0
+                all_pred_bis.append(smoothed)
+                all_label_bis.append(label_np[b_idx] * 100.0)
+                all_phase.append(phase_np[b_idx])
 
             all_pred_ph.append(
-                out["phase_logits"][:, -1, :].argmax(-1).detach().cpu().numpy())
-            all_true_ph.append(phase_labels[:, -1].cpu().numpy())
+                out["phase_logits"].argmax(-1).detach().cpu().numpy().ravel())
+            all_true_ph.append(phase_labels.cpu().numpy().ravel())
 
             all_pred_stim.append(
                 torch.sigmoid(out["stim_logits"][:, :, 0]).detach().cpu().float().numpy().ravel())
@@ -410,7 +470,9 @@ class TrainerV3:
 
         def phase_mae(ph_id):
             m = phase_arr == ph_id
-            return float(np.abs(pred_arr[m] - label_arr[m]).mean()) if m.sum() >= 5 else float("nan")
+            # min 500 timesteps for stable estimate (v9: min=5 caused wild oscillation
+            # because induction/recovery are <1% of data → single-batch luck dominated)
+            return float(np.abs(pred_arr[m] - label_arr[m]).mean()) if m.sum() >= 500 else float("nan")
 
         phase_acc  = float((pred_ph == true_ph).mean())
         st_scores  = np.concatenate(all_pred_stim)
@@ -452,8 +514,8 @@ class TrainerV3:
         hdr = (
             f"{'Timestamp':<19}  {'Ep':>4}  {'Ph':>3}  "
             f"{'TotLoss':>8}  {'BIS':>7}  {'Phase':>7}  {'Stim':>7}  "
-            f"{'PKD':>7}  {'DistPK':>7}  {'DistVit':>7}  {'Trans':>7}  "
-            f"{'vMAE':>6}  {'vInd':>6}  {'vRec':>6}  "
+            f"{'PKD':>7}  {'VitalD':>7}  {'DistPK':>7}  {'DistVit':>7}  {'Trans':>7}  "
+            f"{'vMAE':>6}  {'vEMA':>6}  {'vInd':>6}  {'vRec':>6}  "
             f"{'PhAcc':>6}  {'StAUC':>6}  "
             f"{'LR':>9}  {'SPS':>6}  {'train_t':>7}  {'val_t':>5}  {'flag'}"
         )
@@ -485,6 +547,7 @@ class TrainerV3:
                  f"phase={train_m['train_phase']:.4f}  "
                  f"stim={train_m['train_stim']:.4f}  "
                  f"pkd={train_m['train_pkd']:.4f}  "
+                 f"vd={train_m.get('train_vitald', 0.0):.4f}  "
                  f"dp={train_m['train_distill_pk']:.4f}  "
                  f"dv={train_m['train_distill_vital']:.4f}  "
                  f"trans={train_m['train_trans']:.4f}  "
@@ -508,6 +571,7 @@ class TrainerV3:
                 ("train_phase",         train_m["train_phase"]),
                 ("train_stim",          train_m["train_stim"]),
                 ("train_pkd",           train_m["train_pkd"]),
+                ("train_vitald",        train_m.get("train_vitald", 0.0)),
                 ("train_distill_pk",    train_m["train_distill_pk"]),
                 ("train_distill_vital", train_m["train_distill_vital"]),
                 ("train_trans",         train_m["train_trans"]),
@@ -525,8 +589,30 @@ class TrainerV3:
                 if k in self.history:
                     self.history[k].append(v)
 
-            improved = val_m["val_mae"] < self.best_val_mae
+            cur_mae = val_m["val_mae"]
+
+            # EMA 更新（α=0.3）
+            if self._ema_val_mae is None:
+                self._ema_val_mae = cur_mae
+            else:
+                self._ema_val_mae = (self._ema_alpha * cur_mae
+                                     + (1 - self._ema_alpha) * self._ema_val_mae)
+            ema_str = f"{self._ema_val_mae:.2f}"
+
+            # 检查点：以原始 val_mae 为准（抓住每一个真实最优点）
+            improved = cur_mae < self.best_val_mae
             flag = "*** BEST" if improved else ""
+            if improved:
+                self.best_val_mae  = cur_mae
+                self.best_val_loss = val_m["val_loss"]
+                self._save_checkpoint(epoch, cur_mae)
+
+            # 早停计数：以 EMA val_mae 为准（防单次抖动误触发）
+            if self._ema_val_mae < self.best_val_mae_ema:
+                self.best_val_mae_ema = self._ema_val_mae
+                self.no_improve = 0
+            else:
+                self.no_improve += 1
 
             def _f(v, fmt=".2f"):
                 return f"{v:{fmt}}" if (v == v) else "  nan"
@@ -540,10 +626,12 @@ class TrainerV3:
                 f"{train_m['train_phase']:>7.4f}  "
                 f"{train_m['train_stim']:>7.4f}  "
                 f"{train_m['train_pkd']:>7.4f}  "
+                f"{train_m.get('train_vitald', 0.0):>7.4f}  "
                 f"{train_m['train_distill_pk']:>7.4f}  "
                 f"{train_m['train_distill_vital']:>7.4f}  "
                 f"{train_m['train_trans']:>7.4f}  "
-                f"{val_m['val_mae']:>6.2f}  "
+                f"{cur_mae:>6.2f}  "
+                f"{ema_str:>6}  "
                 f"{_f(val_m['val_mae_induction']):>6}  "
                 f"{_f(val_m['val_mae_recovery']):>6}  "
                 f"{_f(val_m['val_phase_acc']*100,'.1f')+chr(37):>6}  "
@@ -552,7 +640,7 @@ class TrainerV3:
                 f"{train_m.get('throughput',0):>6.0f}  "
                 f"{train_sec:>6.0f}s  "
                 f"{val_sec:>4.0f}s  "
-                f"{flag}",
+                f"{flag}  ni={self.no_improve}/{self.patience}",
                 flush=True,
             )
 
@@ -560,24 +648,19 @@ class TrainerV3:
             epochs_done   = epoch - self.start_epoch + 1
             eta_s = (time.time() - train_start) / epochs_done * (self.epochs - epoch)
             _log(f"Epoch {epoch} val done  {val_sec:.0f}s  "
-                 f"vMAE={val_m['val_mae']:.2f}  "
+                 f"vMAE={cur_mae:.2f}  EMA={ema_str}  "
                  f"vInd={_f(val_m['val_mae_induction'])}  "
                  f"vRec={_f(val_m['val_mae_recovery'])}  "
                  f"PhAcc={_f(val_m['val_phase_acc']*100,'.1f')}%  "
                  f"StAUC={_f(val_m['val_stim_auroc'],'.3f')}  "
+                 f"ni={self.no_improve}/{self.patience}  "
                  f"elapsed={elapsed_total}  eta={_fmt_elapsed(eta_s)}", "VAL")
 
-            if improved:
-                self.best_val_mae  = val_m["val_mae"]
-                self.best_val_loss = val_m["val_loss"]
-                self.no_improve = 0
-                self._save_checkpoint(epoch, val_m["val_mae"])
-            else:
-                self.no_improve += 1
-                if self.no_improve >= self.patience:
-                    _log(f"Early stopping at epoch {epoch} "
-                         f"(patience={self.patience}  no_improve={self.no_improve})", "STOP")
-                    break
+            if self.no_improve >= self.patience:
+                _log(f"Early stopping at epoch {epoch} "
+                     f"(patience={self.patience}  no_improve={self.no_improve}  "
+                     f"EMA={self._ema_val_mae:.2f})", "STOP")
+                break
 
         print("-" * len(hdr))
         _log(f"Training complete.  Best val_MAE={self.best_val_mae:.2f} BIS", "DONE")
@@ -585,13 +668,14 @@ class TrainerV3:
     def _save_checkpoint(self, epoch: int, val_mae: float) -> None:
         path = self.checkpoint_dir / "best_model_v3.pt"
         torch.save({
-            "epoch":               epoch,
-            "model_state_dict":    self.model.state_dict(),
-            "optimizer_state_dict":self.optimizer.state_dict(),
-            "val_mae":             val_mae,
-            "val_loss":            self.best_val_loss,
-            "history":             self.history,
-            "cfg":                 self.cfg,
+            "epoch":                epoch,
+            "model_state_dict":     self.model.state_dict(),
+            "optimizer_state_dict": self.optimizer.state_dict(),
+            "scheduler_state_dict": self.scheduler.state_dict(),   # 精确还原 cos annealing
+            "val_mae":              val_mae,
+            "val_loss":             self.best_val_loss,
+            "history":              self.history,
+            "cfg":                  self.cfg,
         }, path)
         _log(f"Checkpoint saved  epoch={epoch}  val_MAE={val_mae:.2f} BIS  "
              f"path={path}", "CKPT")

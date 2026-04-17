@@ -1,0 +1,207 @@
+# EEG Pipeline Configuration v11 — MERIDIAN v11
+#
+# v11 升级：基于 v10 ep16-86 系统评估的四项修复
+#
+#   根因诊断（v10 失败分析）：
+#     1. LR 调度过慢：CosineAnnealingLR(T_max=200) 在 ep86 LR 仅从 1e-4 降至 6e-5
+#        → 参数更新量始终大于 loss landscape 当前精度需求
+#        → train_bis 平坦 0.0016（60+ epoch 零进展），vMAE ±1.5 BIS 持续振荡
+#
+#     2. Vital 蒸馏发散：dv 0.648 → 0.771 持续上升（EEG↔Vital 特征空间不可对齐）
+#        → lambda_distill_vital=0.02 × dv=0.77 → 梯度噪声 ≈ lambda_bis × bis_loss
+#        → Phase 3 主任务被随机方向的 Vital 梯度污染
+#
+#     3. Stim 梯度比例：Phase 2 stim:BIS = 7:1（lambda_stim=0.5 × 0.025 vs 2.0 × 0.0016）
+#        → BIS 头参数更新被 stim 任务主导，无法继续收敛
+#
+#     4. PK 蒸馏过强：Phase 3 distill_pk:BIS = 7.7:1（0.1 × 0.23 vs 2.0 × 0.0015）
+#        → 即使关闭 Vital，PK 蒸馏依然覆盖 BIS 梯度
+#
+#   修复措施：
+#     1. CosineAnnealingWarmRestarts(T_0=30) — 每 Phase 完整余弦衰减（1e-4 → 1e-6）
+#        → Phase 1 ep30: LR=1e-6（精细收敛）；Phase 2 ep31: LR 重置 1e-4（重新适应）
+#        → 预期：vMAE 振荡从 ±1.5 降至 ±0.5 BIS
+#
+#     2. 关闭 Vital 蒸馏（lambda_distill_vital=0, lambda_vitald=0）
+#        → VitalEncoder 继续存在于模型结构（推理不影响），但不产生梯度
+#        → 消除 Phase 3 中 69% 的噪声梯度
+#
+#     3. lambda_stim: 0.5 → 0.15（stim:BIS 梯度比 7:1 → 1.2:1）
+#
+#     4. lambda_distill_pk: 0.1 → 0.03（distill_pk:BIS 梯度比 7.7:1 → 2.3:1）
+#
+#   Phase 3 梯度平衡验证（基于 v10 ep66 实测损失值）：
+#     main = 2.0×0.0015 + 0.05×0.052 + 0.15×0.0105 = 0.003+0.0026+0.00158 = 0.0072
+#     aux  = 0.3×0.0045 + 0.03×0.23 + 0.3×0.0009   = 0.00135+0.0069+0.00027 = 0.00852
+#     aux:main = 1.18:1 ✓（v10 为 3.7:1）
+#     BIS 占 total: 0.003/0.01572 = 19.1%（v10 约 7%）
+#
+#   v11 额外：启用 spectral_slope + gamma_emg_ratio（需重建 HDF5 → feature_dim=28）
+#     重建命令：
+#       python scripts/preprocess_data.py --config configs/pipeline_v11.yaml --v3
+#     预期：EMG 污染程度可量化，BIS 头获得 EMG 分离信息
+
+eeg:
+  channels: ["BIS/EEG1_WAV", "BIS/EEG2_WAV"]
+  srate: 128
+
+labels:
+  tracks: ["BIS/BIS", "BIS/SQI", "BIS/SR"]
+  target: "BIS/BIS"
+  sqi_track: "BIS/SQI"
+  sr_track: "BIS/SR"
+
+windowing:
+  window_sec: 4
+  stride_sec: 1
+  label_lag_sec: 15
+  min_valid_label: 10
+  max_valid_label: 100
+  baseline_sec: 60
+
+normalization:
+  use_band_ratio: true
+  delta_dominance_thresh: 0.90
+  alpha_beta_band_hz: [8.0, 30.0]
+
+sqi:
+  min_score: 0.5
+  kurtosis_thresh: 5.0
+  high_freq_ratio_thresh: 0.4
+
+filters:
+  median_kernel_ms: 20
+  highpass_hz: 0.5
+  lowpass_hz: 47.0
+  notch_hz: [60.0]
+  notch_q: 30.0
+
+wavelet:
+  wavelet: "db4"
+  level: 5
+  esu_energy_thresh: 3.0
+
+features:
+  bands:
+    delta: [0.5, 4.0]
+    theta: [4.0, 8.0]
+    alpha: [8.0, 13.0]
+    beta:  [13.0, 30.0]
+    gamma: [30.0, 47.0]
+  permutation_entropy:
+    order: 6
+    delay: 1
+  sef95: true
+  lzc: true
+  bsr: true
+  bsr_thresholds_uv: [2.0, 5.0, 10.0]
+  # v11：EMG 分离特征正式启用（需要重建 HDF5）
+  # spectral_slope  : log-log 谱斜率（1=EEG 1/f 陡降，0=EMG 平坦）
+  # gamma_emg_ratio : P(30-47 Hz)/[P(30-47)+P(0.5-30)]（EMG 污染度）
+  spectral_slope: true
+  gamma_emg_ratio: true
+  pac: false
+
+model:
+  # ── EEG 编码器参数 ───────────────────────────────────────────────────────────
+  cnn_channels: [32, 64, 128]
+  cnn_kernel: 7
+  feature_dim: 28
+  # feature_dim=28 计算（匹配 v11 重建后的 HDF5）：
+  #   5 bands + PE + SEF95 + LZC + BSR×3 + spectral_slope + gamma_emg_ratio = 13/ch
+  #   13 × 2 ch + 2 (alpha_asym + mean_sqi) = 28
+  # feat_proj 输入 = feature_dim + n_eeg_channels(SQI) = 28 + 2 = 30
+  d_model: 128
+  gru_layers: 2
+  gru_dropout: 0.15
+  lnn_backend: "gru"
+  sqi_inertia_threshold: 0.5
+  bsr_layer: true
+  grad_checkpoint: true
+
+  # ── 多模态教师网络参数 ────────────────────────────────────────────────────────
+  pk_hidden: 64
+  vital_hidden: 64
+  d_proj: 64
+
+training:
+  model_version: "v3"
+
+  # ── 序列参数 ──────────────────────────────────────────────────────────────────
+  seq_len: 300
+  seq_stride: 150
+
+  # ── 数据质量过滤 ──────────────────────────────────────────────────────────────
+  case_std_pct_low: 10
+  case_std_pct_high: 90
+  min_seq_std: 0.0
+  balance_bis: false
+
+  # ── 三阶段课程学习控制 ────────────────────────────────────────────────────────
+  phase2_start_epoch: 31
+  phase3_start_epoch: 61
+
+  # ── 损失函数权重 ──────────────────────────────────────────────────────────────
+  # 主任务
+  lambda_bis:   2.0
+  lambda_phase: 0.05
+  lambda_stim:  0.15   # v10 was 0.5 → 0.15 (stim:BIS 梯度比 7:1 → 1.2:1)
+
+  # 辅助任务（Phase 3）
+  # v11 根因修复：
+  #   lambda_vitald=0 + lambda_distill_vital=0 → 关闭 Vital 蒸馏（dv 持续发散，纯噪声）
+  #   lambda_distill_pk=0.03（v10 was 0.1）→ distill_pk:BIS 梯度比 7.7:1 → 2.3:1
+  lambda_pkd:           0.3
+  lambda_vitald:        0.0    # disabled — VitalEncoder 特征空间与 EEG 不可对齐
+  lambda_distill_pk:    0.03   # v10 was 0.1 — reduce PK distillation dominance
+  lambda_distill_vital: 0.0    # disabled — dv 发散无法收敛（v10 ep62-86 持续上升）
+  lambda_trans:         0.3
+
+  transition_boost: 2.0
+  vel_threshold:    0.2
+
+  # ── 刺激检测参数（v8 确认有效，不变）────────────────────────────────────────
+  focal_alpha:     0.5
+  stim_pos_weight: 15.0
+  focal_gamma:     2.0
+
+  # ── 自适应权重 ────────────────────────────────────────────────────────────────
+  use_auto_weight:  false
+  auto_weight_temp: 0.5
+
+  # ── 过渡期过采样 ──────────────────────────────────────────────────────────────
+  transition_upsample_factor: 2
+
+  # ── 优化器 ───────────────────────────────────────────────────────────────────
+  batch_size: 32
+  lr: 1.0e-4
+  epochs: 200
+  patience: 70
+
+  # ── 学习率调度（v11 核心修复）────────────────────────────────────────────────
+  # CosineAnnealingWarmRestarts(T_0=30, T_mult=1, eta_min=1e-6)
+  # T_0=30 与每个 Phase 长度对齐（Phase1: ep1-30, Phase2: ep31-60, Phase3: ep61-90）
+  # 每个 Phase 内 LR 完整从 1e-4 衰减到 1e-6，Phase 切换时自动重置到 1e-4
+  # 效果：ep30 LR≈1e-6（Phase1 精细收敛）→ ep31 LR=1e-4（Phase2 重新适应 stim）
+  lr_T0:     30
+  lr_eta_min: 1.0e-6
+
+  # ── warmup（Phase 切换保护，与 v10 相同）──────────────────────────────────────
+  stim_warmup_epochs:   5    # Phase2: stim 线性热身 ep31→ep35
+  phase3_warmup_epochs: 5    # Phase3: 蒸馏损失线性热身 ep61→ep65
+
+  # ── 其他超参数 ────────────────────────────────────────────────────────────────
+  noise_std: 0.05
+  val_split: 0.15
+  test_split: 0.1
+  seed: 42
+  steps_per_epoch: null
+  n_prefetch: 4
+  huber_delta: 0.10
+
+paths:
+  raw_data: "raw_data"
+  preprocessed: "outputs/preprocessed"
+  checkpoints: "outputs/checkpoints/v11"
+  logs: "outputs/logs/v11"
+  multimodal_h5: "outputs/preprocessed/dataset_v3_v11.h5"

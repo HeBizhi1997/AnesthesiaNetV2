@@ -2,17 +2,26 @@
 Feature extraction step.
 
 Computes a fixed-length feature vector from the (filtered) EEG window.
-Features per channel:
-  - 5 relative band powers (delta/theta/alpha/beta/gamma)
-  - Permutation Entropy (PE)
-  - Spectral Edge Frequency 95% (SEF95)
-  - Burst Suppression Ratio (BSR)
-  - Lempel-Ziv Complexity (LZC, binarised)
 
-Plus inter-channel:
-  - Alpha asymmetry (log ratio of alpha power Fp1 vs Fp2)
+特征顺序（每通道，与 BatchProcessor 完全一致）：
+  [0-4]  relative band powers (δ θ α β γ)
+  [5]    Permutation Entropy (PE)
+  [6]    Spectral Edge Frequency 95% (SEF95, 归一化到 [0,1])
+  [7]    Lempel-Ziv Complexity (LZC, binarised)
+  [8-10] multi-threshold Burst Suppression Ratio (BSR)
+  [11]   spectral_slope    (EMG 指标：1/f 谱斜率，1=EEG-like，0=EMG-like)
+  [12]   gamma_emg_ratio   (EMG 指标：P(30-47 Hz) / P(0.5-47 Hz))
+  [13]   PAC modulation index (仅 pac=true 时添加，默认不启用)
 
-Total features: n_channels × 9 + 1 = 19 (for 2 channels)
+跨通道特征（末尾）：
+  alpha asymmetry (log ratio Fp1/Fp2)
+  mean SQI
+
+总维度（v10，2 通道，pac=false）：13 × 2 + 2 = 28
+总维度（v9,  2 通道，pac=false）：11 × 2 + 2 = 24
+
+BatchProcessor（离线预处理）与 FeatureExtractor（实时推理）使用相同计算，
+确保训练特征与推理特征逐位对齐，不产生偏移。
 """
 
 from __future__ import annotations
@@ -152,7 +161,7 @@ def _lzc(x: np.ndarray) -> float:
         return 0.0
     binary = (x > np.median(x)).astype(int)
     s = "".join(map(str, binary))
-    # Standard LZC algorithm
+    # Standard LZC algorithm (Kaspar & Schuster 1987)
     c, l, i = 1, 1, 1
     while i + l <= n:
         if s[i: i + l] in s[:i]:
@@ -165,6 +174,48 @@ def _lzc(x: np.ndarray) -> float:
     return float(c / norm)
 
 
+def _spectral_slope(pxx: np.ndarray, freqs: np.ndarray,
+                    lo: float = 1.0, hi: float = 47.0) -> float:
+    """
+    1/f 谱斜率（log-log 线性回归），单窗口版本。
+
+    EEG 神经信号：斜率 ≈ -2 ~ -4（1/f 幂律，陡降）
+    EMG 肌电污染：斜率 ≈  0 ~ -1（宽频近白噪声，平坦）
+
+    返回归一化值 ∈ [0, 1]：
+      1.0 → 斜率 ≤ -4（纯 EEG 特征）
+      0.0 → 斜率 ≥  0（纯 EMG / 白噪声）
+    """
+    mask = (freqs >= lo) & (freqs <= hi) & (freqs > 0)
+    if mask.sum() < 2:
+        return 0.5
+    f_log  = np.log10(freqs[mask])
+    p_log  = np.log10(pxx[mask] + 1e-12)
+    f_mean = f_log.mean()
+    f_cen  = f_log - f_mean
+    f_var  = (f_cen ** 2).sum() + 1e-12
+    slope  = float(((p_log - p_log.mean()) * f_cen).sum() / f_var)
+    return float(np.clip(-slope / 4.0, 0.0, 1.0))
+
+
+def _gamma_emg_ratio(pxx: np.ndarray, freqs: np.ndarray,
+                     gamma_lo: float = 30.0, gamma_hi: float = 47.0,
+                     low_lo: float = 0.5,   low_hi: float = 30.0) -> float:
+    """
+    Gamma 段相对低频段的功率比，作为 EMG gamma 污染指标，单窗口版本。
+
+    丙泊酚麻醉下：delta/theta 主导 → 比值低（<0.15）
+    EMG 污染时  ：gamma（30-47 Hz）被优先抬高 → 比值升高
+
+    返回 P(gamma) / [P(gamma) + P(low)] ∈ (0, 1)
+    """
+    g_mask = (freqs >= gamma_lo) & (freqs < gamma_hi)
+    l_mask = (freqs >= low_lo)   & (freqs < low_hi)
+    p_gamma = float(pxx[g_mask].sum()) + 1e-12
+    p_low   = float(pxx[l_mask].sum()) + 1e-12
+    return float(p_gamma / (p_gamma + p_low))
+
+
 # ------------------------------------------------------------------ #
 # Step class                                                           #
 # ------------------------------------------------------------------ #
@@ -173,6 +224,10 @@ class FeatureExtractor(EEGStep):
     """
     Computes the full feature vector and stores it in ctx.features.
     Does NOT modify ctx.data.
+
+    特征顺序与 BatchProcessor 完全一致（训练/推理对齐）：
+      per-channel: [bands | PE | SEF95 | LZC | BSR×3 | slope? | gamma_ratio?]
+      inter-ch:    [alpha_asymmetry | mean_SQI]
     """
 
     BAND_NAMES = ["delta", "theta", "alpha", "beta", "gamma"]
@@ -180,35 +235,41 @@ class FeatureExtractor(EEGStep):
     def __init__(self, cfg: Dict[str, Any], fs: float = 128.0):
         self.fs = fs
         raw_bands = cfg.get("bands", {})
+        # 只使用标准五段（与 BatchProcessor 一致，忽略配置中的 emg_lo/hi 等额外频段）
         self.bands = {k: raw_bands[k] for k in self.BAND_NAMES if k in raw_bands}
         self.pe_order = cfg.get("permutation_entropy", {}).get("order", 6)
         self.pe_delay = cfg.get("permutation_entropy", {}).get("delay", 1)
-        self.compute_sef = cfg.get("sef95", True)
-        self.compute_lzc = cfg.get("lzc", True)
-        self.compute_bsr = cfg.get("bsr", True)
-        # Multi-threshold BSR: list of amplitude thresholds (in normalised units)
-        self.bsr_thresholds = cfg.get("bsr_thresholds_uv", [2.0, 5.0, 10.0])
-        # PAC: alpha-gamma phase-amplitude coupling (propofol-sensitive)
-        # Disabled by default — enable with features.pac: true in config.
-        # Requires HDF5 reprocessing when first enabled.
+        self.compute_sef         = cfg.get("sef95", True)
+        self.compute_lzc         = cfg.get("lzc", True)
+        self.compute_bsr         = cfg.get("bsr", True)
+        self.bsr_thresholds      = cfg.get("bsr_thresholds_uv", [2.0, 5.0, 10.0])
+        # v10 EMG 分离算法特征（与 BatchProcessor 共用同一计算逻辑）
+        self.compute_slope       = cfg.get("spectral_slope", False)
+        self.compute_gamma_ratio = cfg.get("gamma_emg_ratio", False)
+        # PAC: alpha-gamma 相位-幅度耦合（丙泊酚敏感，默认关闭）
+        # 注意：PAC 不在 BatchProcessor 中实现，开启后需同步更新 BatchProcessor
         self.compute_pac = cfg.get("pac", False)
 
     def _channel_features(self, x: np.ndarray) -> np.ndarray:
         """
         Return 1-D feature array for a single channel.
-        Feature layout (10 values per channel):
-          [0-4] relative band powers (δ θ α β γ)
-          [5]   permutation entropy
-          [6]   SEF95 (normalised to [0,1])
-          [7]   LZC complexity
-          [8-10] multi-threshold BSR (<2, <5, <10 normalised units)
+
+        特征布局（与 BatchProcessor.compute() 逐位对齐）：
+          [0-4]  relative band powers (δ θ α β γ)
+          [5]    permutation entropy
+          [6]    SEF95 (归一化到 [0,1])
+          [7]    LZC complexity
+          [8-10] multi-threshold BSR
+          [11]   spectral_slope    (若 compute_slope=True)
+          [12]   gamma_emg_ratio   (若 compute_gamma_ratio=True)
+          [13]   PAC               (若 compute_pac=True，默认关闭)
         """
         nperseg = min(256, len(x))
         freqs, pxx = welch(x, fs=self.fs, nperseg=nperseg)
 
         feats: List[float] = []
 
-        # Relative band powers
+        # Relative band powers (5 standard bands)
         bp = _band_powers(pxx, freqs, self.bands)
         for name in self.BAND_NAMES:
             feats.append(bp.get(name, 0.0))
@@ -227,6 +288,14 @@ class FeatureExtractor(EEGStep):
         # Multi-threshold BSR
         if self.compute_bsr:
             feats.extend(_multi_bsr(x, self.bsr_thresholds))
+
+        # EMG 谱斜率（与 BatchProcessor._batch_spectral_slope 相同逻辑）
+        if self.compute_slope:
+            feats.append(_spectral_slope(pxx, freqs))
+
+        # Gamma 污染比（与 BatchProcessor._batch_gamma_emg_ratio 相同逻辑）
+        if self.compute_gamma_ratio:
+            feats.append(_gamma_emg_ratio(pxx, freqs))
 
         # PAC: alpha-gamma modulation index (disabled by default)
         if self.compute_pac:
@@ -269,6 +338,10 @@ class FeatureExtractor(EEGStep):
             n += 1
         if self.compute_bsr:
             n += len(self.bsr_thresholds)
+        if self.compute_slope:
+            n += 1
+        if self.compute_gamma_ratio:
+            n += 1
         if self.compute_pac:
             n += 1
         return n
@@ -289,13 +362,25 @@ class FeatureExtractor(EEGStep):
         assert ctx.features is not None, "FeatureExtractor did not set ctx.features"
         if np.isnan(ctx.features).any():
             raise ValueError("FeatureExtractor produced NaN features.")
-        n_bands = len(self.BAND_NAMES)
-        stride = self.feats_per_channel   # correct offset between channels
+        n_bands = len(self.BAND_NAMES)   # 5
+        stride  = self.feats_per_channel
         for ch in range(ctx.n_channels):
-            offset = ch * stride
+            offset   = ch * stride
             band_sum = float(ctx.features[offset: offset + n_bands].sum())
             if not (0.3 <= band_sum <= 1.3):
                 raise ValueError(
-                    f"Ch{ch} band power sum={band_sum:.3f} not in [0.7, 1.3]. "
+                    f"Ch{ch} band power sum={band_sum:.3f} not in [0.3, 1.3]. "
                     f"Relative power normalisation may have failed."
                 )
+        # EMG 特征范围校验
+        if self.compute_slope:
+            for ch in range(ctx.n_channels):
+                slope_idx = ch * stride + n_bands + 1 + \
+                    (1 if self.compute_sef else 0) + \
+                    (1 if self.compute_lzc else 0) + \
+                    (len(self.bsr_thresholds) if self.compute_bsr else 0)
+                slope_val = float(ctx.features[slope_idx])
+                if not (0.0 <= slope_val <= 1.0):
+                    raise ValueError(
+                        f"Ch{ch} spectral_slope={slope_val:.3f} outside [0,1]."
+                    )

@@ -40,3 +40,49 @@ Thumbs.db
 # Temporary files
 *.tmp
 *.temp
+
+# ── C# / .NET / WPF ──────────────────────────────────────────────────────────
+
+# Build output
+[Bb]in/
+[Oo]bj/
+
+# Visual Studio
+.vs/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+*.VC.db
+*.VC.opendb
+
+# NuGet packages (restored on build, no need to commit)
+**/packages/
+!**/packages/build/
+*.nupkg
+*.snupkg
+project.lock.json
+project.fragment.lock.json
+
+# Publish profiles
+**/Properties/PublishProfiles/
+
+# WPF XAML designer / build temp
+*_wpftmp.csproj
+*.TemporaryGeneratedFile_*.cs
+
+# Test results
+[Tt]est[Rr]esult*/
+*.trx
+*.coverage
+
+# Debug symbols
+*.pdb
+
+# Rider / ReSharper
+_ReSharper*/
+*.DotSettings.user
+
+# EEGMonitor session recordings (large binary data, stays local)
+**/Sessions/
+**/EEGMonitor/Logs/

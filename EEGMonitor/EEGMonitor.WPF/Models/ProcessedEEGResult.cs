@@ -9,6 +9,8 @@ public class ProcessedEEGResult
     public double? QNox { get; set; }   // Placeholder – not yet implemented
     public double? SPI { get; set; }    // Placeholder – not yet implemented
     public double SQI { get; set; }     // Signal Quality Index 0-100
+    public double? StateEntropy { get; set; }     // SE  0–91   (spectral entropy 0.8-32 Hz)
+    public double? ResponseEntropy { get; set; }  // RE  0–100  (spectral entropy 0.8-47 Hz)
 
     // ── EEG Component Waves (time-series, same length as epoch) ──
     public double[] RawEEG { get; set; } = Array.Empty<double>();

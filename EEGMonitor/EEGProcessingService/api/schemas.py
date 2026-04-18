@@ -38,6 +38,8 @@ class ProcessResponse(BaseModel):
     # Depth of anesthesia
     bis: Optional[float] = None
     sqi: float = 0.0
+    se: Optional[float] = None   # State Entropy   0–91
+    re: Optional[float] = None   # Response Entropy 0–100
 
     # Vitals
     heart_rate: Optional[float] = None

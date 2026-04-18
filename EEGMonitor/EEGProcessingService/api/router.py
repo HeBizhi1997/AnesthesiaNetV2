@@ -5,6 +5,7 @@ from loguru import logger
 from api.schemas import ProcessRequest, ProcessResponse
 from preprocessing.eeg_preprocessor import EEGPreprocessor
 from preprocessing.hrv_processor import HRVProcessor
+from preprocessing.entropy_processor import EntropyProcessor
 from models.bis_predictor import BISPredictor
 
 router = APIRouter()
@@ -13,14 +14,15 @@ router = APIRouter()
 _preprocessor: EEGPreprocessor | None = None
 _hrv: HRVProcessor | None = None
 _bis_predictor: BISPredictor | None = None
-
+_entropy: EntropyProcessor | None = None
 
 
 def init_services(model_path: str | None = None):
-    global _preprocessor, _hrv, _bis_predictor
+    global _preprocessor, _hrv, _bis_predictor, _entropy
     _preprocessor = EEGPreprocessor(sample_rate=256)
     _hrv = HRVProcessor(sample_rate=256)
     _bis_predictor = BISPredictor(model_path=model_path, sample_rate=256)
+    _entropy = EntropyProcessor(sample_rate=256)
     logger.info("Processing services initialized")
 
 
@@ -69,7 +71,13 @@ async def process_eeg(req: ProcessRequest):
 
     bis = bis_raw  # raw model output, no post-processing smoothing
 
-    # 3. HRV from pulse wave
+    # 3. Spectral Entropy (SE / RE)
+    entropy_result: dict = {}
+    if _entropy is not None:
+        eeg_ch0 = eeg[:, 0]
+        entropy_result = _entropy.compute(eeg_ch0)
+
+    # 4. HRV from pulse wave
     pulse_arr = np.array(req.pulse_wave, dtype=np.float64) if req.pulse_wave else np.array([])
     hrv_result = _hrv.compute(pulse_arr) if pulse_arr.size > 0 else {}  # type: ignore
 
@@ -90,10 +98,19 @@ async def process_eeg(req: ProcessRequest):
         dsa_times=eeg_result["dsa_times"],
         sqi=eeg_result["sqi"],
         bis=float(bis) if bis is not None else None,
+        se=entropy_result.get("se"),
+        re=entropy_result.get("re"),
         heart_rate=hrv_result.get("hr") or req.heart_rate,
         hrv_rmssd=hrv_result.get("hrv_rmssd"),
         pulse_wave=hrv_result.get("pulse_wave", req.pulse_wave),
         spo2=req.spo2,
     )
-    logger.debug(f"Processed epoch: BIS={bis:.1f}, SQI={eeg_result['sqi']:.0f}")
+    se_val = entropy_result.get("se")
+    re_val = entropy_result.get("re")
+    logger.debug(
+        f"Processed epoch: BIS={bis:.1f if bis else 'N/A'}, "
+        f"SE={se_val:.1f if se_val else 'N/A'}, "
+        f"RE={re_val:.1f if re_val else 'N/A'}, "
+        f"SQI={eeg_result['sqi']:.0f}"
+    )
     return response

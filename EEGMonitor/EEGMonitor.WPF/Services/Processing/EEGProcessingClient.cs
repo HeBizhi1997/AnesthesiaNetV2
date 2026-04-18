@@ -78,6 +78,8 @@ public sealed class EEGProcessingClient : IEEGProcessingClient
             QNox = null,
             SPI = null,
             SQI = (double)(d.sqi ?? 0.0),
+            StateEntropy = (double?)(d.se),
+            ResponseEntropy = (double?)(d.re),
             DeltaWave = ToDoubleArray(d.delta_wave),
             ThetaWave = ToDoubleArray(d.theta_wave),
             AlphaWave = ToDoubleArray(d.alpha_wave),

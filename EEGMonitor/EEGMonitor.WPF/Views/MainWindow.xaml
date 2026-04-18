@@ -296,27 +296,89 @@
                     <RowDefinition Height="1.7*"/> <!-- Band Power Distribution -->
                 </Grid.RowDefinitions>
 
-                <!-- ── BIS: dominant, color-coded, zone-labeled ────────────── -->
+                <!-- ── BIS (left) + Entropy SE/RE (right) ─────────────────── -->
                 <Border Grid.Row="0" Style="{StaticResource CardBorderStyle}">
-                    <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
-                        <TextBlock Text="BIS  麻醉深度指数" FontSize="13" FontWeight="SemiBold"
-                                   Foreground="{StaticResource TextSecondaryBrush}"
-                                   HorizontalAlignment="Center" Margin="0,0,0,2"/>
-                        <TextBlock Text="{Binding BisDisplay}"
-                                   FontSize="88" FontWeight="Bold" FontFamily="Consolas"
-                                   HorizontalAlignment="Center"
-                                   Foreground="{Binding BisValue, Converter={StaticResource BISColorConverter}}"/>
-                        <TextBlock Text="{Binding BisZoneDisplay}"
-                                   FontSize="20" FontWeight="SemiBold"
-                                   HorizontalAlignment="Center" Margin="0,2,0,0"
-                                   Foreground="{Binding BisValue, Converter={StaticResource BISColorConverter}}"/>
-                        <!-- BIS scale reference -->
-                        <TextBlock FontSize="10" Foreground="{StaticResource TextSecondaryBrush}"
-                                   HorizontalAlignment="Center" Margin="0,6,0,0">
-                            <Run Text="&lt;40 过深   "/><Run Text="40-60 适宜" Foreground="#3FB950"/>
-                            <Run Text="   60-80 偏浅   "/><Run Text=">80 清醒" Foreground="#F85149"/>
-                        </TextBlock>
-                    </StackPanel>
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="3*"/>   <!-- BIS dominant -->
+                            <ColumnDefinition Width="Auto"/> <!-- divider -->
+                            <ColumnDefinition Width="2*"/>   <!-- SE / RE -->
+                        </Grid.ColumnDefinitions>
+
+                        <!-- BIS -->
+                        <StackPanel Grid.Column="0" HorizontalAlignment="Center" VerticalAlignment="Center">
+                            <TextBlock Text="BIS  麻醉深度指数" FontSize="13" FontWeight="SemiBold"
+                                       Foreground="{StaticResource TextSecondaryBrush}"
+                                       HorizontalAlignment="Center" Margin="0,0,0,2"/>
+                            <TextBlock Text="{Binding BisDisplay}"
+                                       FontSize="80" FontWeight="Bold" FontFamily="Consolas"
+                                       HorizontalAlignment="Center"
+                                       Foreground="{Binding BisValue, Converter={StaticResource BISColorConverter}}"/>
+                            <TextBlock Text="{Binding BisZoneDisplay}"
+                                       FontSize="18" FontWeight="SemiBold"
+                                       HorizontalAlignment="Center" Margin="0,2,0,0"
+                                       Foreground="{Binding BisValue, Converter={StaticResource BISColorConverter}}"/>
+                            <TextBlock FontSize="9" Foreground="{StaticResource TextSecondaryBrush}"
+                                       HorizontalAlignment="Center" Margin="0,5,0,0">
+                                <Run Text="&lt;40 过深   "/><Run Text="40-60 适宜" Foreground="#3FB950"/>
+                                <Run Text="   60-80 偏浅   "/><Run Text=">80 清醒" Foreground="#F85149"/>
+                            </TextBlock>
+                        </StackPanel>
+
+                        <Rectangle Grid.Column="1" Width="1" Fill="{StaticResource BorderBrush}"
+                                   VerticalAlignment="Stretch" Margin="0,16"/>
+
+                        <!-- Spectral Entropy: SE + RE -->
+                        <StackPanel Grid.Column="2" HorizontalAlignment="Center" VerticalAlignment="Center">
+                            <TextBlock Text="熵指数" FontSize="13" FontWeight="SemiBold"
+                                       Foreground="{StaticResource TextSecondaryBrush}"
+                                       HorizontalAlignment="Center" Margin="0,0,0,6"/>
+
+                            <!-- SE -->
+                            <StackPanel Margin="0,0,0,8">
+                                <TextBlock Text="SE  状态熵" FontSize="11"
+                                           Foreground="{StaticResource TextSecondaryBrush}"
+                                           HorizontalAlignment="Center"/>
+                                <TextBlock Text="{Binding SeDisplay}"
+                                           FontSize="52" FontWeight="Bold" FontFamily="Consolas"
+                                           HorizontalAlignment="Center"
+                                           Foreground="{Binding SeValue, Converter={StaticResource BISColorConverter}}"/>
+                                <TextBlock Text="(0 – 91)" FontSize="9"
+                                           Foreground="{StaticResource TextSecondaryBrush}"
+                                           HorizontalAlignment="Center"/>
+                            </StackPanel>
+
+                            <!-- RE -->
+                            <StackPanel Margin="0,0,0,8">
+                                <TextBlock Text="RE  反应熵" FontSize="11"
+                                           Foreground="{StaticResource TextSecondaryBrush}"
+                                           HorizontalAlignment="Center"/>
+                                <TextBlock Text="{Binding ReDisplay}"
+                                           FontSize="52" FontWeight="Bold" FontFamily="Consolas"
+                                           HorizontalAlignment="Center"
+                                           Foreground="{Binding ReValue, Converter={StaticResource BISColorConverter}}"/>
+                                <TextBlock Text="(0 – 100)" FontSize="9"
+                                           Foreground="{StaticResource TextSecondaryBrush}"
+                                           HorizontalAlignment="Center"/>
+                            </StackPanel>
+
+                            <!-- RE - SE difference: EMG indicator -->
+                            <Border Background="#1A1F27" CornerRadius="4" Padding="8,4" Margin="4,0">
+                                <StackPanel>
+                                    <TextBlock Text="RE − SE  肌电指示" FontSize="9"
+                                               Foreground="{StaticResource TextSecondaryBrush}"
+                                               HorizontalAlignment="Center"/>
+                                    <TextBlock Text="{Binding ReSeDiffDisplay}"
+                                               FontSize="24" FontWeight="Bold" FontFamily="Consolas"
+                                               HorizontalAlignment="Center"
+                                               Foreground="{StaticResource YellowWarnBrush}"/>
+                                    <TextBlock Text="≥10 有肌电活动" FontSize="8"
+                                               Foreground="{StaticResource TextSecondaryBrush}"
+                                               HorizontalAlignment="Center"/>
+                                </StackPanel>
+                            </Border>
+                        </StackPanel>
+                    </Grid>
                 </Border>
 
                 <!-- ── SpO2 + Heart Rate ────────────────────────────────────── -->

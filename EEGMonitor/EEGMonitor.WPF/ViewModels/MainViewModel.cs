@@ -57,6 +57,13 @@ public partial class MainViewModel : BaseViewModel
     [ObservableProperty] private string _spiDisplay = "---";   // placeholder
     [ObservableProperty] private string _bisZoneDisplay = "";
 
+    // ── Spectral Entropy ─────────────────────────────────────────────────────
+    [ObservableProperty] private double _seValue = double.NaN;   // State Entropy 0-91
+    [ObservableProperty] private double _reValue = double.NaN;   // Response Entropy 0-100
+    [ObservableProperty] private string _seDisplay = "---";
+    [ObservableProperty] private string _reDisplay = "---";
+    [ObservableProperty] private string _reSeDiffDisplay = "---"; // RE-SE: EMG indicator
+
     // ── Vitals ──────────────────────────────────────────────────────────────
     [ObservableProperty] private string _heartRateDisplay = "---";
     [ObservableProperty] private string _spO2Display = "---";
@@ -293,6 +300,21 @@ public partial class MainViewModel : BaseViewModel
                 < 80 => "偏浅",
                 _    => "清醒风险"
             };
+
+            // Spectral Entropy
+            SeValue = result.StateEntropy ?? double.NaN;
+            ReValue = result.ResponseEntropy ?? double.NaN;
+            SeDisplay = result.StateEntropy.HasValue ? result.StateEntropy.Value.ToString("F0") : "---";
+            ReDisplay = result.ResponseEntropy.HasValue ? result.ResponseEntropy.Value.ToString("F0") : "---";
+            if (result.StateEntropy.HasValue && result.ResponseEntropy.HasValue)
+            {
+                var diff = result.ResponseEntropy.Value - result.StateEntropy.Value;
+                ReSeDiffDisplay = $"{diff:F0}";
+            }
+            else
+            {
+                ReSeDiffDisplay = "---";
+            }
 
             // Vitals
             if (result.HeartRate.HasValue) HeartRateDisplay = $"{result.HeartRate:F0}";
@@ -552,6 +574,9 @@ public partial class MainViewModel : BaseViewModel
 
         BisDisplay = "---"; BisValue = double.NaN; BisZoneDisplay = "";
         SqiDisplay = "---"; SqiValue = double.NaN;
+        SeDisplay = "---"; SeValue = double.NaN;
+        ReDisplay = "---"; ReValue = double.NaN;
+        ReSeDiffDisplay = "---";
         HeartRateDisplay = "---"; SpO2Display = "---"; HrvDisplay = "---";
         DeltaPower = ThetaPower = AlphaPower = BetaPower = GammaPower = 0;
     }

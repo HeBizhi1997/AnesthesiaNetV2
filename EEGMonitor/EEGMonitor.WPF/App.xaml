@@ -4,55 +4,62 @@
              ShutdownMode="OnMainWindowClose">
     <Application.Resources>
         <ResourceDictionary>
-            <!-- ── Color Palette ── -->
-            <Color x:Key="BgDeepColor">#0D1117</Color>
-            <Color x:Key="BgPanelColor">#161B22</Color>
-            <Color x:Key="BgCardColor">#21262D</Color>
-            <Color x:Key="BorderColor">#30363D</Color>
-            <Color x:Key="TextPrimaryColor">#E6EDF3</Color>
-            <Color x:Key="TextSecondaryColor">#8B949E</Color>
-            <Color x:Key="AccentCyanColor">#58A6FF</Color>
-            <Color x:Key="GreenOkColor">#3FB950</Color>
-            <Color x:Key="YellowWarnColor">#D29922</Color>
-            <Color x:Key="RedCritColor">#F85149</Color>
 
-            <!-- Wave Colors -->
-            <Color x:Key="DeltaColor">#4FC3F7</Color>
-            <Color x:Key="ThetaColor">#81C784</Color>
-            <Color x:Key="AlphaColor">#FFB74D</Color>
-            <Color x:Key="BetaColor">#F06292</Color>
-            <Color x:Key="GammaColor">#CE93D8</Color>
+            <!-- ═══ Color Palette — Deep Navy Medical Monitor ═══════════════ -->
+            <Color x:Key="BgDeepColor">#06080F</Color>
+            <Color x:Key="BgPanelColor">#090E1C</Color>
+            <Color x:Key="BgCardColor">#0C1422</Color>
+            <Color x:Key="BorderColor">#182C46</Color>
+            <Color x:Key="TextPrimaryColor">#C8DCF0</Color>
+            <Color x:Key="TextSecondaryColor">#3D5A7A</Color>
+            <Color x:Key="AccentCyanColor">#00C8FF</Color>
+            <Color x:Key="GreenOkColor">#00E676</Color>
+            <Color x:Key="YellowWarnColor">#FFB300</Color>
+            <Color x:Key="RedCritColor">#FF4560</Color>
+            <Color x:Key="OrangeColor">#FF8C00</Color>
+            <Color x:Key="AmberColor">#F0A020</Color>
 
-            <SolidColorBrush x:Key="BgDeepBrush" Color="{StaticResource BgDeepColor}"/>
-            <SolidColorBrush x:Key="BgPanelBrush" Color="{StaticResource BgPanelColor}"/>
-            <SolidColorBrush x:Key="BgCardBrush" Color="{StaticResource BgCardColor}"/>
-            <SolidColorBrush x:Key="BorderBrush" Color="{StaticResource BorderColor}"/>
-            <SolidColorBrush x:Key="TextPrimaryBrush" Color="{StaticResource TextPrimaryColor}"/>
+            <!-- Wave colors (reference palette) -->
+            <Color x:Key="DeltaColor">#5B8EFF</Color>
+            <Color x:Key="ThetaColor">#00C8FF</Color>
+            <Color x:Key="AlphaColor">#00E676</Color>
+            <Color x:Key="BetaColor">#FF9500</Color>
+            <Color x:Key="GammaColor">#FF4560</Color>
+
+            <!-- Brushes -->
+            <SolidColorBrush x:Key="BgDeepBrush"       Color="{StaticResource BgDeepColor}"/>
+            <SolidColorBrush x:Key="BgPanelBrush"      Color="{StaticResource BgPanelColor}"/>
+            <SolidColorBrush x:Key="BgCardBrush"       Color="{StaticResource BgCardColor}"/>
+            <SolidColorBrush x:Key="BorderBrush"       Color="{StaticResource BorderColor}"/>
+            <SolidColorBrush x:Key="TextPrimaryBrush"  Color="{StaticResource TextPrimaryColor}"/>
             <SolidColorBrush x:Key="TextSecondaryBrush" Color="{StaticResource TextSecondaryColor}"/>
-            <SolidColorBrush x:Key="AccentCyanBrush" Color="{StaticResource AccentCyanColor}"/>
-            <SolidColorBrush x:Key="GreenOkBrush" Color="{StaticResource GreenOkColor}"/>
-            <SolidColorBrush x:Key="YellowWarnBrush" Color="{StaticResource YellowWarnColor}"/>
-            <SolidColorBrush x:Key="RedCritBrush" Color="{StaticResource RedCritColor}"/>
+            <SolidColorBrush x:Key="AccentCyanBrush"   Color="{StaticResource AccentCyanColor}"/>
+            <SolidColorBrush x:Key="GreenOkBrush"      Color="{StaticResource GreenOkColor}"/>
+            <SolidColorBrush x:Key="YellowWarnBrush"   Color="{StaticResource YellowWarnColor}"/>
+            <SolidColorBrush x:Key="RedCritBrush"      Color="{StaticResource RedCritColor}"/>
+            <SolidColorBrush x:Key="OrangeBrush"       Color="{StaticResource OrangeColor}"/>
+            <SolidColorBrush x:Key="AmberBrush"        Color="{StaticResource AmberColor}"/>
 
             <!-- Wave brushes -->
             <SolidColorBrush x:Key="DeltaBrush" Color="{StaticResource DeltaColor}"/>
             <SolidColorBrush x:Key="ThetaBrush" Color="{StaticResource ThetaColor}"/>
             <SolidColorBrush x:Key="AlphaBrush" Color="{StaticResource AlphaColor}"/>
-            <SolidColorBrush x:Key="BetaBrush" Color="{StaticResource BetaColor}"/>
+            <SolidColorBrush x:Key="BetaBrush"  Color="{StaticResource BetaColor}"/>
             <SolidColorBrush x:Key="GammaBrush" Color="{StaticResource GammaColor}"/>
 
-            <!-- ── Global Styles ── -->
+            <!-- ═══ Typography ════════════════════════════════════════════════ -->
             <Style TargetType="TextBlock">
                 <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}"/>
                 <Setter Property="FontFamily" Value="Consolas, Courier New"/>
             </Style>
 
+            <!-- ═══ Button Styles ═════════════════════════════════════════════ -->
             <Style TargetType="Button" x:Key="ActionButtonStyle">
-                <Setter Property="Background" Value="{StaticResource BgCardBrush}"/>
+                <Setter Property="Background" Value="#0C1422"/>
                 <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}"/>
-                <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}"/>
+                <Setter Property="BorderBrush" Value="#182C46"/>
                 <Setter Property="BorderThickness" Value="1"/>
-                <Setter Property="Padding" Value="12,6"/>
+                <Setter Property="Padding" Value="12,5"/>
                 <Setter Property="Cursor" Value="Hand"/>
                 <Setter Property="Template">
                     <Setter.Value>
@@ -60,16 +67,17 @@
                             <Border Background="{TemplateBinding Background}"
                                     BorderBrush="{TemplateBinding BorderBrush}"
                                     BorderThickness="{TemplateBinding BorderThickness}"
-                                    CornerRadius="4"
+                                    CornerRadius="3"
                                     Padding="{TemplateBinding Padding}">
                                 <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
                             </Border>
                             <ControlTemplate.Triggers>
                                 <Trigger Property="IsMouseOver" Value="True">
-                                    <Setter Property="Background" Value="#2D333B"/>
+                                    <Setter Property="Background" Value="#14203A"/>
+                                    <Setter Property="BorderBrush" Value="#00C8FF"/>
                                 </Trigger>
                                 <Trigger Property="IsPressed" Value="True">
-                                    <Setter Property="Background" Value="#1C2128"/>
+                                    <Setter Property="Background" Value="#0A1828"/>
                                 </Trigger>
                             </ControlTemplate.Triggers>
                         </ControlTemplate>
@@ -78,40 +86,56 @@
             </Style>
 
             <Style TargetType="Button" x:Key="PrimaryButtonStyle" BasedOn="{StaticResource ActionButtonStyle}">
-                <Setter Property="Background" Value="#238636"/>
-                <Setter Property="BorderBrush" Value="#2EA043"/>
-                <Setter Property="Foreground" Value="White"/>
+                <Setter Property="Background" Value="#0A2A14"/>
+                <Setter Property="BorderBrush" Value="#00E676"/>
+                <Setter Property="Foreground" Value="#00E676"/>
             </Style>
 
             <Style TargetType="Button" x:Key="DangerButtonStyle" BasedOn="{StaticResource ActionButtonStyle}">
-                <Setter Property="Background" Value="#B62324"/>
-                <Setter Property="BorderBrush" Value="#F85149"/>
-                <Setter Property="Foreground" Value="White"/>
+                <Setter Property="Background" Value="#2A0A0C"/>
+                <Setter Property="BorderBrush" Value="#FF4560"/>
+                <Setter Property="Foreground" Value="#FF4560"/>
             </Style>
 
             <Style TargetType="ComboBox" x:Key="DarkComboStyle">
-                <Setter Property="Background" Value="{StaticResource BgCardBrush}"/>
+                <Setter Property="Background" Value="#0C1422"/>
                 <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}"/>
-                <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}"/>
+                <Setter Property="BorderBrush" Value="#182C46"/>
                 <Setter Property="Padding" Value="6,4"/>
             </Style>
 
             <Style TargetType="TextBox" x:Key="DarkTextBoxStyle">
-                <Setter Property="Background" Value="{StaticResource BgCardBrush}"/>
+                <Setter Property="Background" Value="#0C1422"/>
                 <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}"/>
-                <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}"/>
+                <Setter Property="BorderBrush" Value="#182C46"/>
                 <Setter Property="CaretBrush" Value="{StaticResource TextPrimaryBrush}"/>
                 <Setter Property="Padding" Value="6,4"/>
             </Style>
 
-            <!-- Panel card style -->
+            <!-- Panel card — sharp corners, navy background, blue border -->
             <Style TargetType="Border" x:Key="CardBorderStyle">
                 <Setter Property="Background" Value="{StaticResource BgCardBrush}"/>
                 <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}"/>
                 <Setter Property="BorderThickness" Value="1"/>
-                <Setter Property="CornerRadius" Value="6"/>
-                <Setter Property="Padding" Value="6"/>
-                <Setter Property="Margin" Value="3"/>
+                <Setter Property="CornerRadius" Value="0"/>
+                <Setter Property="Padding" Value="0"/>
+                <Setter Property="Margin" Value="1"/>
+            </Style>
+
+            <!-- Index card with cyan left accent -->
+            <Style TargetType="Border" x:Key="IndexCardStyle">
+                <Setter Property="Background" Value="#0A1220"/>
+                <Setter Property="BorderBrush" Value="#00C8FF"/>
+                <Setter Property="BorderThickness" Value="2,0,0,0"/>
+                <Setter Property="Margin" Value="0,0,0,2"/>
+            </Style>
+
+            <!-- Section label style -->
+            <Style TargetType="Border" x:Key="SectionLabelStyle">
+                <Setter Property="Background" Value="#070C18"/>
+                <Setter Property="BorderBrush" Value="#182C46"/>
+                <Setter Property="BorderThickness" Value="0,0,0,1"/>
+                <Setter Property="Padding" Value="8,4"/>
             </Style>
 
         </ResourceDictionary>

@@ -18,9 +18,9 @@ public class BISColorConverter : IValueConverter
             return Brushes.Gray;
         return bis switch
         {
-            >= 40 and <= 60 => new SolidColorBrush(Color.FromRgb(0x3F, 0xB9, 0x50)),
-            (>= 20 and < 40) or (> 60 and <= 80) => new SolidColorBrush(Color.FromRgb(0xD2, 0x99, 0x22)),
-            _ => new SolidColorBrush(Color.FromRgb(0xF8, 0x51, 0x49))
+            >= 40 and <= 60 => new SolidColorBrush(Color.FromRgb(0x00, 0xE6, 0x76)), // vivid green
+            (>= 20 and < 40) or (> 60 and <= 80) => new SolidColorBrush(Color.FromRgb(0xFF, 0xB3, 0x00)), // amber
+            _ => new SolidColorBrush(Color.FromRgb(0xFF, 0x45, 0x60))  // coral red
         };
     }
     public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture) =>
@@ -72,6 +72,27 @@ public class BoolToVisConverter : IValueConverter
             }
         }
         return flag ? Visibility.Visible : Visibility.Collapsed;
+    }
+    public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture) =>
+        DependencyProperty.UnsetValue;
+}
+
+/// <summary>
+/// Colors fNox (inverse of BIS): green (&lt;40 adequate), amber (40-60 monitor), red (&gt;60 alert).
+/// </summary>
+[ValueConversion(typeof(double), typeof(Brush))]
+public class NSIColorConverter : IValueConverter
+{
+    public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
+    {
+        if (value is not double v || double.IsNaN(v))
+            return Brushes.Gray;
+        return v switch
+        {
+            <= 50 => new SolidColorBrush(Color.FromRgb(0x00, 0xE6, 0x76)), // green — target zone 30-50
+            < 65  => new SolidColorBrush(Color.FromRgb(0xFF, 0xB3, 0x00)), // amber — monitor
+            _     => new SolidColorBrush(Color.FromRgb(0xFF, 0x45, 0x60))  // red — analgesia failure
+        };
     }
     public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture) =>
         DependencyProperty.UnsetValue;

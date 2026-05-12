@@ -277,9 +277,13 @@ class FeatureExtractor(EEGStep):
         # Permutation Entropy
         feats.append(_permutation_entropy(x, self.pe_order, self.pe_delay))
 
-        # SEF95
+        # SEF95 — normalize by EEG band upper limit (47 Hz) for better dynamic range.
+        # Previously used /fs*2 (=/Nyquist), which compressed SEF95 into ~[0.15, 0.45].
+        # Dividing by 47 Hz (lowpass cutoff) yields ~[0.2, 0.85] for typical EEG.
+        # NOTE: requires HDF5 rebuild if training data used the old normalization.
         if self.compute_sef:
-            feats.append(_sef95(pxx, freqs) / self.fs * 2.0)
+            sef_hz = _sef95(pxx, freqs)
+            feats.append(float(np.clip(sef_hz / 47.0, 0.0, 1.0)))
 
         # LZC
         if self.compute_lzc:

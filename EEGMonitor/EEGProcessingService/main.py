@@ -53,12 +53,20 @@ app.include_router(simulate_router)
 
 @app.on_event("startup")
 async def startup():
-    # Resolve model path relative to the tianjin project root
-    model_path = Path(__file__).resolve().parents[2] / "checkpoints" / "best_model.pth"
-    init_services(model_path=str(model_path) if model_path.exists() else None)
+    # Preferred checkpoint: latest v11 model in the tianjin outputs folder
+    root = Path(__file__).resolve().parents[2]   # tianjin/
+    candidates = [
+        root / "outputs" / "checkpoints" / "v11" / "best_model_v3.pt",
+        root / "outputs" / "checkpoints" / "best_model.pt",
+        root / "checkpoints" / "best_model.pth",
+    ]
+    model_path = next((p for p in candidates if p.exists()), None)
+    init_services(model_path=str(model_path) if model_path else None)
     logger.info(f"EEG Processing Service started on http://localhost:8765")
-    if not model_path.exists():
-        logger.warning(f"No model checkpoint found at {model_path} – using heuristic BIS")
+    if model_path:
+        logger.info(f"Using checkpoint: {model_path}")
+    else:
+        logger.warning("No model checkpoint found – using heuristic BIS")
 
 
 if __name__ == "__main__":

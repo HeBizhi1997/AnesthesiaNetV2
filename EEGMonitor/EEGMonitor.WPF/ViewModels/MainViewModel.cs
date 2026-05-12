@@ -14,12 +14,15 @@ using OxyPlot.Axes;
 using OxyPlot.Series;
 using System.Collections.ObjectModel;
 using System.Windows;
+using System.Windows.Threading;
 
 namespace EEGMonitor.ViewModels;
 
 public partial class MainViewModel : BaseViewModel
 {
     private readonly ISerialPortService _serial;
+    private readonly NSMSerialService _nsmSerial;
+    private readonly IPulseSerialService _pulseSerial;
     private readonly IEEGProcessingClient _processing;
     private readonly IRecordingService _recording;
     private readonly IPlaybackService _playback;
@@ -30,17 +33,43 @@ public partial class MainViewModel : BaseViewModel
 
     private DateTime? _sessionStart;
     private System.Timers.Timer? _durationTimer;
+    private System.Timers.Timer? _clockTimer;
+    private CancellationTokenSource? _healthCheckCts;
     private Views.Dialogs.SimulationDialog? _simulationDialog;
+
+    // ── Clock ────────────────────────────────────────────────────────────────
+    [ObservableProperty] private string _currentTimeDisplay = "";
+    [ObservableProperty] private string _currentDateDisplay = "";
 
     // ── Connection ──────────────────────────────────────────────────────────
     [ObservableProperty] private bool _isConnected;
     [ObservableProperty] private bool _isServiceOnline;
     [ObservableProperty] private string _statusMessage = "Ready";
+    [ObservableProperty] private string _eegDiagnostics = "";
     [ObservableProperty] private ObservableCollection<string> _availablePorts = new();
     [ObservableProperty] private string _selectedPort = "COM3";
     [ObservableProperty] private int _selectedBaudRate = 115200;
     [ObservableProperty] private List<int> _baudRates = new() { 9600, 57600, 115200, 230400, 460800, 921600 };
-    [ObservableProperty] private int _channelCount = 4;
+    [ObservableProperty] private int _channelCount = 2;
+
+    // ── Device type selection ──────────────────────────────────────────────────
+    [ObservableProperty]
+    private DeviceType _selectedDeviceType = DeviceType.ADS1299;
+
+    partial void OnSelectedDeviceTypeChanged(DeviceType value)
+    {
+        OnPropertyChanged(nameof(NsmSampleRateVisible));
+    }
+    public DeviceType[] DeviceTypes { get; } = { DeviceType.ADS1299, DeviceType.NSM };
+    [ObservableProperty] private int _nsmSampleRate = 100;
+    public List<int> NsmSampleRates { get; } = new() { 100, 200, 250, 500 };
+    public Visibility NsmSampleRateVisible => SelectedDeviceType == DeviceType.NSM ? Visibility.Visible : Visibility.Collapsed;
+
+    // ── Pulse sensor connection ──────────────────────────────────────────────
+    [ObservableProperty] private ObservableCollection<string> _availablePulsePorts = new();
+    [ObservableProperty] private string _selectedPulsePort = "COM4";
+    [ObservableProperty] private bool _isPulseConnected;
+    [ObservableProperty] private string _pulseStatusMessage = "未连接";
 
     // ── Session ──────────────────────────────────────────────────────────────
     [ObservableProperty] private bool _isRecording;
@@ -56,6 +85,27 @@ public partial class MainViewModel : BaseViewModel
     [ObservableProperty] private string _qNoxDisplay = "---";  // placeholder
     [ObservableProperty] private string _spiDisplay = "---";   // placeholder
     [ObservableProperty] private string _bisZoneDisplay = "";
+    [ObservableProperty] private string _bisSource = "ML";     // "ML" or "---"
+
+    // ── NSM native indices (device-reported, not ML-inferred) ─────────────────
+    [ObservableProperty] private double _nsmCsiValue = double.NaN;
+    [ObservableProperty] private string _nsmCsiDisplay = "---";
+    [ObservableProperty] private string _nsmCsiZone = "";
+    [ObservableProperty] private double _nsmBsValue = double.NaN;
+    [ObservableProperty] private string _nsmBsDisplay = "---";
+    [ObservableProperty] private double _nsmSqiValue = double.NaN;
+    [ObservableProperty] private string _nsmSqiDisplay = "---";
+    [ObservableProperty] private double _nsmEmgValue = double.NaN;
+    [ObservableProperty] private string _nsmEmgDisplay = "---";
+    [ObservableProperty] private double _nsmNoxValue = double.NaN;
+    [ObservableProperty] private string _nsmNoxDisplay = "---";
+    [ObservableProperty] private string _nsmNoxZone = "";
+    [ObservableProperty] private double _nsmDeltaPower;
+    [ObservableProperty] private double _nsmThetaPower;
+    [ObservableProperty] private double _nsmAlphaPower;
+    [ObservableProperty] private double _nsmBetaPower;
+    [ObservableProperty] private double _nsmGammaPower;
+    [ObservableProperty] private string _nsmStatusDisplay = "---";
 
     // ── Spectral Entropy ─────────────────────────────────────────────────────
     [ObservableProperty] private double _seValue = double.NaN;   // State Entropy 0-91
@@ -64,10 +114,27 @@ public partial class MainViewModel : BaseViewModel
     [ObservableProperty] private string _reDisplay = "---";
     [ObservableProperty] private string _reSeDiffDisplay = "---"; // RE-SE: EMG indicator
 
+    // ── fNox ─────────────────────────────────────────────────────────────────
+    [ObservableProperty] private double _fnoxValue = double.NaN;  // 0-100
+    [ObservableProperty] private string _fnoxDisplay = "---";
+    [ObservableProperty] private string _fnoxZoneDisplay = "";
+    [ObservableProperty] private double _fnoxBarValue = 0.0;
+    [ObservableProperty] private bool   _fnoxMRMode = false;
+
     // ── Vitals ──────────────────────────────────────────────────────────────
     [ObservableProperty] private string _heartRateDisplay = "---";
     [ObservableProperty] private string _spO2Display = "---";
     [ObservableProperty] private string _hrvDisplay = "---";
+
+    // ── Sleep vs anesthesia discrimination ───────────────────────────────────
+    [ObservableProperty] private string _saIndicator = "---";
+    [ObservableProperty] private string _saDisplay = "";
+    [ObservableProperty] private double _spindleDensityValue;
+    [ObservableProperty] private bool   _isSleepDetected;
+
+    // ── Signal quality diagnostics ───────────────────────────────────────────
+    [ObservableProperty] private string _signalWarning = "";
+    [ObservableProperty] private bool   _hasSignalWarning;
 
     // ── Band Powers ──────────────────────────────────────────────────────────
     [ObservableProperty] private double _deltaPower;
@@ -101,8 +168,10 @@ public partial class MainViewModel : BaseViewModel
     [ObservableProperty] private bool _isSimulating;
     [ObservableProperty] private string _simulationStatus = "";
 
-    // Rolling 5-minute BIS trend
-    private readonly Queue<(double time, double bis)> _bisTrend = new();
+    // Rolling 5-minute BIS + SE + fNox trend
+    private readonly Queue<(double time, double bis)>  _bisTrend  = new();
+    private readonly Queue<(double time, double se)>   _seTrend   = new();
+    private readonly Queue<(double time, double fnox)> _fnoxTrend = new();
     private const double TREND_WINDOW_SEC = 300.0;
     private double _sessionElapsedSec;
 
@@ -118,6 +187,8 @@ public partial class MainViewModel : BaseViewModel
 
     public MainViewModel(
         ISerialPortService serial,
+        NSMSerialService nsmSerial,
+        IPulseSerialService pulseSerial,
         IEEGProcessingClient processing,
         IRecordingService recording,
         IPlaybackService playback,
@@ -127,6 +198,8 @@ public partial class MainViewModel : BaseViewModel
         ILogger<MainViewModel> logger)
     {
         _serial = serial;
+        _nsmSerial = nsmSerial;
+        _pulseSerial = pulseSerial;
         _processing = processing;
         _recording = recording;
         _playback = playback;
@@ -135,9 +208,30 @@ public partial class MainViewModel : BaseViewModel
         _simulator = simulator;
         _logger = logger;
 
-        _serial.ConnectionStatusChanged += msg => RunOnUI(() => StatusMessage = msg);
+        // NSM device events
+        _nsmSerial.ConnectionStatusChanged += msg => RunOnUI(() => StatusMessage = msg);
+        _nsmSerial.ErrorOccurred += ex => RunOnUI(() => StatusMessage = $"NSM Error: {ex.Message}");
+        _nsmSerial.NSMDataReceived += OnNSMDataReceived;
+        _nsmSerial.SampleReceived += sample =>
+        {
+            if (IsConnected && SelectedDeviceType == DeviceType.NSM)
+                _pipeline.InjectSample(sample);
+        };
+
+        _serial.ConnectionStatusChanged += msg => RunOnUI(() =>
+        {
+            if (msg.StartsWith("接收中"))
+                EegDiagnostics = msg;
+            else
+                StatusMessage = msg;
+        });
         _serial.ErrorOccurred += ex => RunOnUI(() => StatusMessage = $"Error: {ex.Message}");
+
+        _pulseSerial.ConnectionStatusChanged += msg => RunOnUI(() => PulseStatusMessage = msg);
+        _pulseSerial.ErrorOccurred += ex => RunOnUI(() => PulseStatusMessage = $"脉搏错误: {ex.Message}");
+        _pulseSerial.BpmReceived += OnBpmReceived;
         _pipeline.ResultAvailable += OnResultAvailable;
+        _pipeline.RawChunkAvailable += OnRawChunkAvailable;
         _events.EventAdded += ev => RunOnUI(() => ClinicalEvents.Add(ev));
 
         _simulator.PositionChanged += pos =>
@@ -147,9 +241,23 @@ public partial class MainViewModel : BaseViewModel
         _simulator.SimulationStopped += () =>
             RunOnUI(() => { IsSimulating = false; SimulationStatus = ""; ClearAllCharts(); });
 
+        // Real-time clock
+        _clockTimer = new System.Timers.Timer(1000) { AutoReset = true };
+        _clockTimer.Elapsed += (_, _) => RunOnUI(() =>
+        {
+            var now = DateTime.Now;
+            CurrentTimeDisplay = now.ToString("HH:mm:ss");
+            CurrentDateDisplay = now.ToString("yyyy-MM-dd");
+        });
+        _clockTimer.Start();
+        var t0 = DateTime.Now;
+        CurrentTimeDisplay = t0.ToString("HH:mm:ss");
+        CurrentDateDisplay = t0.ToString("yyyy-MM-dd");
+
         InitCharts();
         RefreshPorts();
-        _ = CheckServiceAsync();
+        _healthCheckCts = new CancellationTokenSource();
+        _ = CheckServiceAsync(_healthCheckCts.Token);
     }
 
     // ── Commands ─────────────────────────────────────────────────────────────
@@ -157,27 +265,88 @@ public partial class MainViewModel : BaseViewModel
     [RelayCommand]
     private void RefreshPorts()
     {
+        var ports = _serial.GetAvailablePorts().ToList();
+
         AvailablePorts.Clear();
-        foreach (var p in _serial.GetAvailablePorts()) AvailablePorts.Add(p);
+        foreach (var p in ports) AvailablePorts.Add(p);
         if (AvailablePorts.Count > 0 && !AvailablePorts.Contains(SelectedPort))
             SelectedPort = AvailablePorts[0];
+
+        AvailablePulsePorts.Clear();
+        foreach (var p in ports) AvailablePulsePorts.Add(p);
+        if (AvailablePulsePorts.Count > 0 && !AvailablePulsePorts.Contains(SelectedPulsePort))
+            SelectedPulsePort = AvailablePulsePorts[0];
     }
 
     [RelayCommand]
     private void Connect()
     {
-        if (IsConnected) { _serial.Disconnect(); IsConnected = false; _pipeline.Stop(); return; }
-        var ok = _serial.Connect(SelectedPort, SelectedBaudRate, ChannelCount);
-        if (ok)
+        if (IsConnected) { DisconnectDevice(); return; }
+
+        if (SelectedDeviceType == DeviceType.NSM)
         {
-            IsConnected = true;
-            _pipeline.Start();
-            StatusMessage = $"Connected: {SelectedPort}";
+            var ok = _nsmSerial.Connect(SelectedPort, SelectedBaudRate, 1, NsmSampleRate);
+            if (ok)
+            {
+                IsConnected = true;
+                _pipeline.DeviceSampleRate = NsmSampleRate;
+                _pipeline.Start();
+                StatusMessage = $"NSM Connected: {SelectedPort}";
+            }
+            else
+            {
+                StatusMessage = "NSM Connection failed";
+            }
         }
         else
         {
-            StatusMessage = "Connection failed";
+            var ok = _serial.Connect(SelectedPort, SelectedBaudRate, ChannelCount);
+            if (ok)
+            {
+                IsConnected = true;
+                _pipeline.Start();
+                StatusMessage = $"Connected: {SelectedPort}";
+            }
+            else
+            {
+                StatusMessage = "Connection failed";
+            }
         }
+    }
+
+    private void DisconnectDevice()
+    {
+        _serial.Disconnect();
+        _nsmSerial.Disconnect();
+        IsConnected = false;
+        _pipeline.Stop();
+    }
+
+    [RelayCommand]
+    private void PulseConnect()
+    {
+        if (IsPulseConnected)
+        {
+            _pulseSerial.Disconnect();
+            IsPulseConnected = false;
+            return;
+        }
+        var ok = _pulseSerial.Connect(SelectedPulsePort);
+        if (ok)
+        {
+            IsPulseConnected = true;
+        }
+    }
+
+    private void OnBpmReceived(int bpm)
+    {
+        // Update pipeline so BPM is included in every subsequent EEG chunk sent to Python
+        _pipeline.CurrentHeartRate = bpm > 0 ? (double?)bpm : null;
+
+        RunOnUI(() =>
+        {
+            if (bpm > 0) HeartRateDisplay = bpm.ToString();
+        });
     }
 
     [RelayCommand]
@@ -189,6 +358,9 @@ public partial class MainViewModel : BaseViewModel
                 MessageBoxButton.OK, MessageBoxImage.Warning);
             return;
         }
+        // Reset Python stateful processors so BIS/SE/fNox start fresh for this patient
+        _ = _processing.ResetSessionAsync();
+
         var session = _recording.StartSession(PatientId, SurgeryType);
         _sessionStart = session.StartTime;
         _sessionElapsedSec = 0;
@@ -266,9 +438,17 @@ public partial class MainViewModel : BaseViewModel
     /// <summary>Called by MainWindow.OnClosed before host shutdown.</summary>
     public void Cleanup()
     {
+        _healthCheckCts?.Cancel();
+        _healthCheckCts?.Dispose();
+        _healthCheckCts = null;
+
         _durationTimer?.Stop();
         _durationTimer?.Dispose();
         _durationTimer = null;
+
+        _clockTimer?.Stop();
+        _clockTimer?.Dispose();
+        _clockTimer = null;
 
         _simulator.Stop();
 
@@ -278,21 +458,31 @@ public partial class MainViewModel : BaseViewModel
         if (IsConnected)
         {
             _serial.Disconnect();
+            _nsmSerial.Disconnect();
             _pipeline.Stop();
         }
+
+        if (IsPulseConnected)
+            _pulseSerial.Disconnect();
     }
 
     // ── Data handler ─────────────────────────────────────────────────────────
+
+    private void OnRawChunkAvailable(double[] rawData)
+    {
+        RunOnUI(() => AppendWaveChart(RawEEGModel, _rawBuf, rawData));
+    }
 
     private void OnResultAvailable(ProcessedEEGResult result)
     {
         RunOnUI(() =>
         {
-            // Depth of anesthesia
+            // Depth of anesthesia (ML-inferred)
             BisValue = result.BIS;
             SqiValue = result.SQI;
             BisDisplay = double.IsNaN(result.BIS) ? "---" : result.BIS.ToString("F0");
             SqiDisplay = double.IsNaN(result.SQI) ? "---" : $"{result.SQI:F0}%";
+            BisSource = "ML";
             BisZoneDisplay = double.IsNaN(result.BIS) ? "" : result.BIS switch
             {
                 < 40 => "过深麻醉",
@@ -300,6 +490,21 @@ public partial class MainViewModel : BaseViewModel
                 < 80 => "偏浅",
                 _    => "清醒风险"
             };
+
+            // Signal quality diagnostics
+            if (result.EegAmplitudeUv > 0)
+            {
+                var warnings = new System.Text.StringBuilder();
+                if (result.EegAmplitudeUv < 5.0)
+                    warnings.Append($"⚠ 信号幅度过低 {result.EegAmplitudeUv:F1}µV (应≥15µV) · 检查电极接触");
+                if (result.EegTonalRatio > 0.40)
+                {
+                    if (warnings.Length > 0) warnings.Append("  |  ");
+                    warnings.Append($"⚠ {result.EegDominantHz:F1}Hz 干扰 (占{result.EegTonalRatio*100:F0}%功率) · 非脑电信号");
+                }
+                SignalWarning = warnings.ToString();
+                HasSignalWarning = warnings.Length > 0;
+            }
 
             // Spectral Entropy
             SeValue = result.StateEntropy ?? double.NaN;
@@ -316,10 +521,44 @@ public partial class MainViewModel : BaseViewModel
                 ReSeDiffDisplay = "---";
             }
 
+            // fNox
+            FnoxValue    = result.FNox ?? double.NaN;
+            FnoxBarValue = double.IsNaN(FnoxValue) ? 0 : FnoxValue;
+            FnoxDisplay  = result.FNox.HasValue ? result.FNox.Value.ToString("F0") : "---";
+            FnoxMRMode   = result.FNoxMRMode ?? false;
+            FnoxZoneDisplay = result.FNox switch
+            {
+                null               => "",
+                { } v when v < 30  => "镇痛充分",
+                { } v when v <= 50 => "靶区",
+                { } v when v < 65  => "关注",
+                _                  => "镇痛不足!",
+            };
+
             // Vitals
             if (result.HeartRate.HasValue) HeartRateDisplay = $"{result.HeartRate:F0}";
             if (result.SpO2.HasValue) SpO2Display = $"{result.SpO2:F1}%";
             if (result.HRV_RMSSD.HasValue) HrvDisplay = $"{result.HRV_RMSSD:F1}ms";
+
+            // Sleep vs anesthesia
+            SpindleDensityValue = result.SpindleDensity;
+            IsSleepDetected = result.IsLikelySleep;
+            if (result.IsLikelySleep)
+            {
+                SaIndicator = "睡眠";
+                SaDisplay = $"{result.SpindleDensity:F1} spindles/min";
+            }
+            else if (result.TotalSpindleCount >= 3)
+            {
+                SaIndicator = "可能睡眠";
+                SaDisplay = $"{result.SpindleDensity:F1}/min ({result.TotalSpindleCount} total)";
+            }
+            else
+            {
+                SaIndicator = "---";
+                SaDisplay = result.TotalSpindleCount > 0
+                    ? $"{result.TotalSpindleCount} spindles" : "";
+            }
 
             // Band powers
             DeltaPower = result.DeltaPower * 100;
@@ -348,17 +587,141 @@ public partial class MainViewModel : BaseViewModel
         });
     }
 
+    private void OnNSMDataReceived(NSMDataPacket pkt)
+    {
+        RunOnUI(() =>
+        {
+            // ── NSM native CSI (device-reported anesthesia depth) ──────────
+            if (pkt.CSIValid && pkt.CSI <= 99)
+            {
+                NsmCsiValue = pkt.CSI;
+                NsmCsiDisplay = pkt.CSI.ToString("F0");
+                NsmCsiZone = pkt.CSI switch
+                {
+                    < 40 => "过深麻醉",
+                    < 60 => "适宜区间",
+                    < 80 => "偏浅",
+                    _    => "清醒风险"
+                };
+            }
+            else
+            {
+                NsmCsiDisplay = "---";
+                NsmCsiZone = "";
+            }
+
+            // ── NSM burst suppression ──────────────────────────────────────
+            if (pkt.BSValid && pkt.BS <= 100)
+            {
+                NsmBsValue = pkt.BS;
+                NsmBsDisplay = $"{pkt.BS}%";
+            }
+            else
+                NsmBsDisplay = "---";
+
+            // ── NSM signal quality ─────────────────────────────────────────
+            if (pkt.SQIValid && pkt.SQI <= 100)
+            {
+                NsmSqiValue = pkt.SQI;
+                NsmSqiDisplay = $"{pkt.SQI}%";
+            }
+            else
+                NsmSqiDisplay = "---";
+
+            // ── NSM EMG ────────────────────────────────────────────────────
+            if (pkt.EMGValid && pkt.EMG <= 100)
+            {
+                NsmEmgValue = pkt.EMG;
+                NsmEmgDisplay = pkt.EMG.ToString("F0");
+            }
+            else
+                NsmEmgDisplay = "---";
+
+            // ── NSM NOX (nociception) ──────────────────────────────────────
+            if (pkt.NOXValid && pkt.NOX <= 99)
+            {
+                NsmNoxValue = pkt.NOX;
+                NsmNoxDisplay = pkt.NOX.ToString("F0");
+                NsmNoxZone = pkt.NOX switch
+                {
+                    < 30  => "镇痛充分",
+                    <= 50 => "靶区",
+                    < 65  => "关注",
+                    _     => "镇痛不足!",
+                };
+            }
+            else
+            {
+                NsmNoxDisplay = "---";
+                NsmNoxZone = "";
+            }
+
+            // ── NSM band powers (dB raw) ───────────────────────────────────
+            NsmDeltaPower = pkt.DeltaPowerDb;
+            NsmThetaPower = pkt.ThetaPowerDb;
+            NsmAlphaPower = pkt.AlphaPowerDb;
+            NsmBetaPower  = pkt.BetaPowerDb;
+            NsmGammaPower = pkt.GammaPowerDb;
+
+            // ── NSM connection status ──────────────────────────────────────
+            var sb = new System.Text.StringBuilder();
+            sb.Append($"CSI:{NsmCsiDisplay}");
+            if (pkt.SEF95 > 0) sb.Append($"  SEF:{pkt.SEF95}Hz");
+            NsmStatusDisplay = sb.ToString();
+
+            // ── Signal quality warnings ────────────────────────────────────
+            if (pkt.ElectrodeAlarm || pkt.ElectrodeInvalid)
+            {
+                var w = new System.Text.StringBuilder();
+                if (pkt.ElectrodeAlarm)   w.Append("NSM ⚠ 电极脱落");
+                if (pkt.ImpedanceHigh)    w.Append("  |  ⚠ 阻抗偏高");
+                if (pkt.ElectrodeInvalid) w.Append("  |  ⚠ 电极失效");
+                SignalWarning = w.ToString();
+                HasSignalWarning = true;
+            }
+            else if (pkt.BlackImpedance >= 15 || pkt.WhiteImpedance >= 15)
+            {
+                SignalWarning = $"NSM ⚠ 阻抗过高 (Blk:{pkt.BlackImpedance} Wht:{pkt.WhiteImpedance})";
+                HasSignalWarning = true;
+            }
+            else if (!HasSignalWarning)
+            {
+                SignalWarning = "";
+            }
+
+            // ── Clinical event from NSM ────────────────────────────────────
+            if (pkt.EventNumber > 0)
+            {
+                var eventType = pkt.EventType switch
+                {
+                    NSMEventType.Induction      => ClinicalEventType.Induction,
+                    NSMEventType.Intubation     => ClinicalEventType.Intubation,
+                    NSMEventType.Maintenance    => ClinicalEventType.Custom,
+                    NSMEventType.Surgery        => ClinicalEventType.Incision,
+                    NSMEventType.Injection      => ClinicalEventType.DrugAdministration,
+                    NSMEventType.EndMaintenance => ClinicalEventType.Emergence,
+                    _                           => ClinicalEventType.Custom,
+                };
+                _events.AddEvent(eventType,
+                    label: $"NSM: {pkt.EventType} (#{pkt.EventNumber})",
+                    bis: pkt.CSIValid ? pkt.CSI : null,
+                    sqi: pkt.SQIValid ? pkt.SQI : null);
+            }
+        });
+    }
+
     // ── Chart initializers ───────────────────────────────────────────────────
 
     private void InitCharts()
     {
-        RawEEGModel = MakeWaveModel("Raw EEG", OxyColor.FromRgb(0x8B, 0x94, 0x9E));
-        // Fixed Y-axis (µV) per band: amplitude changes indicate anesthesia depth
-        DeltaModel = MakeWaveModel("δ 0.5-4 Hz", OxyColor.FromRgb(0x4F, 0xC3, 0xF7), yMin: -120, yMax: 120);
-        ThetaModel = MakeWaveModel("θ 4-7 Hz",   OxyColor.FromRgb(0x81, 0xC7, 0x84), yMin: -60,  yMax: 60);
-        AlphaModel = MakeWaveModel("α 8-13 Hz",  OxyColor.FromRgb(0xFF, 0xB7, 0x4D), yMin: -60,  yMax: 60);
-        BetaModel  = MakeWaveModel("β 13-30 Hz", OxyColor.FromRgb(0xF0, 0x62, 0x92), yMin: -40,  yMax: 40);
-        GammaModel = MakeWaveModel("γ 30-47 Hz", OxyColor.FromRgb(0xCE, 0x93, 0xD8), yMin: -25,  yMax: 25);
+        RawEEGModel = MakeWaveModel("", OxyColor.FromRgb(0x5B, 0x8E, 0xFF), yMin: -200, yMax: 200);
+        // New reference palette: γ=red β=orange α=green θ=cyan δ=indigo-blue
+        // Fixed Y-axis (µV): amplitude change visible across anesthesia states
+        DeltaModel = MakeWaveModel("", OxyColor.FromRgb(0x5B, 0x8E, 0xFF), yMin: -120, yMax: 120); // indigo
+        ThetaModel = MakeWaveModel("", OxyColor.FromRgb(0x00, 0xC8, 0xFF), yMin: -60,  yMax: 60);  // cyan
+        AlphaModel = MakeWaveModel("", OxyColor.FromRgb(0x00, 0xE6, 0x76), yMin: -60,  yMax: 60);  // green
+        BetaModel  = MakeWaveModel("", OxyColor.FromRgb(0xFF, 0x95, 0x00), yMin: -40,  yMax: 40);  // orange
+        GammaModel = MakeWaveModel("", OxyColor.FromRgb(0xFF, 0x45, 0x60), yMin: -25,  yMax: 25);  // coral
 
         InitDSAModel();
         InitTrendModel();
@@ -370,11 +733,10 @@ public partial class MainViewModel : BaseViewModel
     {
         var m = new PlotModel
         {
-            Background = OxyColor.FromRgb(0x21, 0x26, 0x2D),
-            PlotAreaBackground = OxyColor.FromRgb(0x0D, 0x11, 0x17),
+            Background = OxyColor.FromRgb(0x09, 0x10, 0x1C),
+            PlotAreaBackground = OxyColor.FromRgb(0x05, 0x0B, 0x14),
             Title = title,
-            TitleFontSize = 10,
-            TitleColor = OxyColor.FromRgb(0x8B, 0x94, 0x9E),
+            TitleFontSize = 0,   // labels come from XAML overlays
         };
         m.Axes.Add(new LinearAxis
         {
@@ -410,36 +772,33 @@ public partial class MainViewModel : BaseViewModel
 
     private void InitDSAModel()
     {
+        var muted = OxyColor.FromRgb(0x2A, 0x42, 0x60);
         DsaModel = new PlotModel
         {
-            Background = OxyColor.FromRgb(0x21, 0x26, 0x2D),
+            Background = OxyColor.FromRgb(0x09, 0x10, 0x1C),
             PlotAreaBackground = OxyColors.Black,
-            Title = "DSA (Density Spectral Array)",
-            TitleFontSize = 10,
-            TitleColor = OxyColor.FromRgb(0x8B, 0x94, 0x9E),
+            TitleFontSize = 0,
         };
         DsaModel.Axes.Add(new LinearAxis
         {
             Position = AxisPosition.Left,
-            Title = "Freq (Hz)",
-            Minimum = 0, Maximum = 40,
-            TitleFontSize = 9,
-            TextColor = OxyColor.FromRgb(0x8B, 0x94, 0x9E),
+            Title = "Hz", Minimum = 0, Maximum = 40,
+            TitleFontSize = 8, FontSize = 8,
+            TextColor = muted, AxislineColor = muted, TicklineColor = muted, TitleColor = muted,
         });
         DsaModel.Axes.Add(new LinearAxis
         {
             Position = AxisPosition.Bottom,
-            Title = "Time (s)",
-            TitleFontSize = 9,
-            TextColor = OxyColor.FromRgb(0x8B, 0x94, 0x9E),
+            TitleFontSize = 0, FontSize = 7,
+            TextColor = muted, AxislineColor = muted, TicklineColor = muted,
         });
         DsaModel.Axes.Add(new LinearColorAxis
         {
             Key = "color",
             Position = AxisPosition.Right,
             Palette = OxyPalettes.Jet(512),
-            Title = "dB",
-            TitleFontSize = 8,
+            TitleFontSize = 0, FontSize = 0,
+            IsAxisVisible = false,
         });
         DsaModel.Series.Add(new HeatMapSeries
         {
@@ -453,44 +812,57 @@ public partial class MainViewModel : BaseViewModel
 
     private void InitTrendModel()
     {
+        var muted = OxyColor.FromRgb(0x2A, 0x42, 0x60);
         TrendModel = new PlotModel
         {
-            Background = OxyColor.FromRgb(0x21, 0x26, 0x2D),
-            PlotAreaBackground = OxyColor.FromRgb(0x0D, 0x11, 0x17),
-            Title = "BIS Trend (5 min)",
-            TitleFontSize = 10,
-            TitleColor = OxyColor.FromRgb(0x8B, 0x94, 0x9E),
+            Background = OxyColor.FromRgb(0x09, 0x10, 0x1C),
+            PlotAreaBackground = OxyColor.FromRgb(0x05, 0x0B, 0x14),
+            TitleFontSize = 0,
         };
         TrendModel.Axes.Add(new LinearAxis
         {
             Position = AxisPosition.Bottom,
-            Title = "Time (s)",
             Minimum = -TREND_WINDOW_SEC, Maximum = 0,
-            TitleFontSize = 9,
-            TextColor = OxyColor.FromRgb(0x8B, 0x94, 0x9E),
+            TextColor = muted, AxislineColor = muted, TicklineColor = muted,
+            FontSize = 8,
         });
         TrendModel.Axes.Add(new LinearAxis
         {
             Position = AxisPosition.Left,
-            Title = "BIS",
-            Minimum = 0, Maximum = 100,
-            MajorStep = 20,
-            TitleFontSize = 9,
-            TextColor = OxyColor.FromRgb(0x8B, 0x94, 0x9E),
+            Minimum = 0, Maximum = 100, MajorStep = 20,
+            TextColor = muted, AxislineColor = muted, TicklineColor = muted,
+            FontSize = 8,
         });
-        // BIS safe zone annotation (40-60)
+        // Safe-zone band (40–60)
         TrendModel.Annotations.Add(new OxyPlot.Annotations.RectangleAnnotation
         {
             MinimumY = 40, MaximumY = 60,
             MinimumX = -TREND_WINDOW_SEC, MaximumX = 0,
-            Fill = OxyColor.FromAColor(30, OxyColors.Green),
+            Fill = OxyColor.FromAColor(25, OxyColor.FromRgb(0x00, 0xE6, 0x76)),
             Layer = OxyPlot.Annotations.AnnotationLayer.BelowSeries,
         });
+        // BIS series (cyan)
         TrendModel.Series.Add(new LineSeries
         {
             Title = "BIS",
-            Color = OxyColor.FromRgb(0x58, 0xA6, 0xFF),
+            Color = OxyColor.FromRgb(0x00, 0xC8, 0xFF),
             StrokeThickness = 2,
+        });
+        // SE series (amber dashed)
+        TrendModel.Series.Add(new LineSeries
+        {
+            Title = "SE",
+            Color = OxyColor.FromRgb(0xF0, 0xA0, 0x20),
+            StrokeThickness = 1.5,
+            LineStyle = LineStyle.Dash,
+        });
+        // fNox series (magenta dotted)
+        TrendModel.Series.Add(new LineSeries
+        {
+            Title = "fNox",
+            Color = OxyColor.FromRgb(0xFF, 0x45, 0xA0),
+            StrokeThickness = 1.5,
+            LineStyle = LineStyle.Dot,
         });
     }
 
@@ -498,33 +870,24 @@ public partial class MainViewModel : BaseViewModel
     {
         PulseWaveModel = new PlotModel
         {
-            Background = OxyColor.FromRgb(0x21, 0x26, 0x2D),
-            PlotAreaBackground = OxyColor.FromRgb(0x0D, 0x11, 0x17),
-            Title = "Pulse / PPG",
-            TitleFontSize = 10,
-            TitleColor = OxyColor.FromRgb(0x8B, 0x94, 0x9E),
+            Background = OxyColor.FromRgb(0x09, 0x10, 0x1C),
+            PlotAreaBackground = OxyColor.FromRgb(0x05, 0x0B, 0x14),
+            TitleFontSize = 0,
         };
-        PulseWaveModel.Axes.Add(new LinearAxis { Position = AxisPosition.Bottom, IsAxisVisible = false });
-        PulseWaveModel.Axes.Add(new LinearAxis { Position = AxisPosition.Left, IsAxisVisible = false });
+        PulseWaveModel.Axes.Add(new LinearAxis { Position = AxisPosition.Bottom, IsAxisVisible = false, IsZoomEnabled = false, IsPanEnabled = false });
+        PulseWaveModel.Axes.Add(new LinearAxis { Position = AxisPosition.Left,   IsAxisVisible = false, IsZoomEnabled = false, IsPanEnabled = false });
         PulseWaveModel.Series.Add(new LineSeries
         {
-            Color = OxyColor.FromRgb(0xF8, 0x51, 0x49),
+            Color = OxyColor.FromRgb(0xFF, 0x45, 0x60),
             StrokeThickness = 1.5,
         });
 
-        HrvModel = new PlotModel
-        {
-            Background = OxyColor.FromRgb(0x21, 0x26, 0x2D),
-            PlotAreaBackground = OxyColor.FromRgb(0x0D, 0x11, 0x17),
-            Title = "HRV (RR Intervals)",
-            TitleFontSize = 10,
-            TitleColor = OxyColor.FromRgb(0x8B, 0x94, 0x9E),
-        };
+        HrvModel = new PlotModel { TitleFontSize = 0 };
         HrvModel.Axes.Add(new LinearAxis { Position = AxisPosition.Bottom, IsAxisVisible = false });
-        HrvModel.Axes.Add(new LinearAxis { Position = AxisPosition.Left, IsAxisVisible = false });
+        HrvModel.Axes.Add(new LinearAxis { Position = AxisPosition.Left,   IsAxisVisible = false });
         HrvModel.Series.Add(new StemSeries
         {
-            Color = OxyColor.FromRgb(0x3F, 0xB9, 0x50),
+            Color = OxyColor.FromRgb(0x00, 0xE6, 0x76),
             StrokeThickness = 1.5,
         });
     }
@@ -538,14 +901,25 @@ public partial class MainViewModel : BaseViewModel
         while (buf.Count > WAVE_WINDOW_SAMPLES) buf.Dequeue();
 
         var series = (LineSeries)model.Series[0];
-        series.Points.Clear();
-        int i = 0;
-        foreach (var v in buf) series.Points.Add(new DataPoint(i++, v));
+        // Incremental update: reuse existing points, only rebuild when buffer count changes
+        var bufList = buf.ToList();
+        if (series.Points.Count == bufList.Count)
+        {
+            // Same length — update Y values in-place (avoids allocation)
+            for (int i = 0; i < bufList.Count; i++)
+            {
+                var pt = series.Points[i];
+                series.Points[i] = new DataPoint(pt.X, bufList[i]);
+            }
+        }
+        else
+        {
+            series.Points.Clear();
+            for (int i = 0; i < bufList.Count; i++)
+                series.Points.Add(new DataPoint(i, bufList[i]));
+        }
 
-        var xAxis = (LinearAxis)model.Axes[0];
-        xAxis.Minimum = 0;
-        xAxis.Maximum = WAVE_WINDOW_SAMPLES;
-        model.InvalidatePlot(true);
+        model.InvalidatePlot(false);   // data-only update, skip axes recalculation
     }
 
     public void ClearAllCharts()
@@ -557,26 +931,29 @@ public partial class MainViewModel : BaseViewModel
         foreach (var m in new[] { RawEEGModel, DeltaModel, ThetaModel, AlphaModel, BetaModel, GammaModel, PulseWaveModel })
         {
             ((LineSeries)m.Series[0]).Points.Clear();
-            m.InvalidatePlot(true);
+            m.InvalidatePlot(false);
         }
 
         _dsaHistory.Clear();
         ((HeatMapSeries)DsaModel.Series[0]).Data = new double[0, 0];
-        DsaModel.InvalidatePlot(true);
+        DsaModel.InvalidatePlot(false);
 
-        _bisTrend.Clear();
+        _bisTrend.Clear(); _seTrend.Clear(); _fnoxTrend.Clear();
         _sessionElapsedSec = 0;
         ((LineSeries)TrendModel.Series[0]).Points.Clear();
-        TrendModel.InvalidatePlot(true);
+        ((LineSeries)TrendModel.Series[1]).Points.Clear();
+        ((LineSeries)TrendModel.Series[2]).Points.Clear();
+        TrendModel.InvalidatePlot(false);
 
         ((StemSeries)HrvModel.Series[0]).Points.Clear();
-        HrvModel.InvalidatePlot(true);
+        HrvModel.InvalidatePlot(false);
 
         BisDisplay = "---"; BisValue = double.NaN; BisZoneDisplay = "";
         SqiDisplay = "---"; SqiValue = double.NaN;
         SeDisplay = "---"; SeValue = double.NaN;
         ReDisplay = "---"; ReValue = double.NaN;
         ReSeDiffDisplay = "---";
+        FnoxDisplay = "---"; FnoxValue = double.NaN; FnoxZoneDisplay = ""; FnoxBarValue = 0; FnoxMRMode = false;
         HeartRateDisplay = "---"; SpO2Display = "---"; HrvDisplay = "---";
         DeltaPower = ThetaPower = AlphaPower = BetaPower = GammaPower = 0;
     }
@@ -605,25 +982,48 @@ public partial class MainViewModel : BaseViewModel
         series.Data = combined;
         series.X0 = 0; series.X1 = col;
         series.Y0 = result.DSAFrequencies[0]; series.Y1 = result.DSAFrequencies[^1];
-        DsaModel.InvalidatePlot(true);
+        DsaModel.InvalidatePlot(false);
     }
 
     private void UpdateTrend(ProcessedEEGResult result)
     {
         if (double.IsNaN(result.BIS)) return;
         _sessionElapsedSec++;
+
         _bisTrend.Enqueue((_sessionElapsedSec, result.BIS));
         while (_bisTrend.Count > 0 && _sessionElapsedSec - _bisTrend.Peek().time > TREND_WINDOW_SEC)
             _bisTrend.Dequeue();
 
-        var series = (LineSeries)TrendModel.Series[0];
-        series.Points.Clear();
-        foreach (var (t, b) in _bisTrend)
-            series.Points.Add(new DataPoint(t - _sessionElapsedSec, b));
+        if (result.StateEntropy.HasValue)
+        {
+            _seTrend.Enqueue((_sessionElapsedSec, result.StateEntropy.Value));
+            while (_seTrend.Count > 0 && _sessionElapsedSec - _seTrend.Peek().time > TREND_WINDOW_SEC)
+                _seTrend.Dequeue();
+        }
 
-        var xAxis = (LinearAxis)TrendModel.Axes[0];
-        xAxis.Minimum = -TREND_WINDOW_SEC; xAxis.Maximum = 0;
-        TrendModel.InvalidatePlot(true);
+        if (result.FNox.HasValue)
+        {
+            _fnoxTrend.Enqueue((_sessionElapsedSec, result.FNox.Value));
+            while (_fnoxTrend.Count > 0 && _sessionElapsedSec - _fnoxTrend.Peek().time > TREND_WINDOW_SEC)
+                _fnoxTrend.Dequeue();
+        }
+
+        var bisSeries = (LineSeries)TrendModel.Series[0];
+        bisSeries.Points.Clear();
+        foreach (var (t, b) in _bisTrend)
+            bisSeries.Points.Add(new DataPoint(t - _sessionElapsedSec, b));
+
+        var seSeries = (LineSeries)TrendModel.Series[1];
+        seSeries.Points.Clear();
+        foreach (var (t, s) in _seTrend)
+            seSeries.Points.Add(new DataPoint(t - _sessionElapsedSec, s));
+
+        var fnoxSeries = (LineSeries)TrendModel.Series[2];
+        fnoxSeries.Points.Clear();
+        foreach (var (t, n) in _fnoxTrend)
+            fnoxSeries.Points.Add(new DataPoint(t - _sessionElapsedSec, n));
+
+        TrendModel.InvalidatePlot(false);
     }
 
     private void UpdatePulseWave(ProcessedEEGResult result)
@@ -632,12 +1032,13 @@ public partial class MainViewModel : BaseViewModel
         AppendWaveChart(PulseWaveModel, _pulseBuf, result.PulseWave);
     }
 
-    private async Task CheckServiceAsync()
+    private async Task CheckServiceAsync(CancellationToken ct)
     {
-        while (true)
+        while (!ct.IsCancellationRequested)
         {
             IsServiceOnline = await _processing.PingAsync();
-            await Task.Delay(5000);
+            try { await Task.Delay(5000, ct); }
+            catch (OperationCanceledException) { break; }
         }
     }
 }

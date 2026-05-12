@@ -234,6 +234,7 @@ class AnesthesiaNetV3(nn.Module):
         vitals: Optional[torch.Tensor]   = None,   # (B, T, 5)
         mask_drug: Optional[torch.Tensor]  = None, # (B, T)
         mask_vital: Optional[torch.Tensor] = None, # (B, T)
+        use_vital: bool = False,  # skip VitalEncoder when vitals loss λ=0
     ) -> Dict[str, torch.Tensor]:
         """
         Returns dict 包含：
@@ -243,8 +244,11 @@ class AnesthesiaNetV3(nn.Module):
           h              : 隐状态（用于流式推理）
           --- 以下仅在训练时（drug_ce 非 None）返回 ---
           bis_pkd        : (B, T, 1)   PK 辅助 BIS 预测
+          bis_vitald     : (B, T, 1)   Vital 辅助 BIS 预测（v3 fix）
           loss_distill_pk    : 标量
           loss_distill_vital : 标量
+          reg_distill_pk     : 标量（教师方差正则化）
+          reg_distill_vital  : 标量（教师方差正则化）
         """
         B, T, n_ch, W = wave.shape
 
@@ -293,19 +297,27 @@ class AnesthesiaNetV3(nn.Module):
             bis_pkd = self.pkd_head(h_pk)                       # (B, T, 1)
             out["bis_pkd"] = bis_pkd
 
-            if vitals is not None:
+            mask_d = mask_drug if mask_drug is not None else torch.ones(B, T, device=h_seq.device)
+
+            # VitalEncoder — 仅在 use_vital=True 时运行
+            if vitals is not None and use_vital:
                 h_vital    = self.vital_enc(vitals)             # (B, T, d_vital)
-                bis_vitald = self.vitald_head(h_vital)          # (B, T, 1)  ← v3 fix
+                bis_vitald = self.vitald_head(h_vital)          # (B, T, 1)
                 out["bis_vitald"] = bis_vitald
+                mask_v = mask_vital if mask_vital is not None else torch.ones(B, T, device=h_seq.device)
+            else:
+                h_vital = None
+                mask_v = None
 
-                mask_d  = mask_drug  if mask_drug  is not None else torch.ones(B, T, device=h_seq.device)
-                mask_v  = mask_vital if mask_vital is not None else torch.ones(B, T, device=h_seq.device)
-
-                loss_pk, loss_vital = self.distill(
-                    h_seq, h_pk, h_vital, mask_d, mask_v
-                )
-                out["loss_distill_pk"]    = loss_pk
+            # 跨模态蒸馏（PK 始终运行，Vital 仅在 use_vital 时运行）
+            loss_pk, loss_vital, reg_pk, reg_vital = self.distill(
+                h_seq, h_pk, h_vital, mask_d, mask_v
+            )
+            out["loss_distill_pk"]    = loss_pk
+            if loss_vital is not None:
                 out["loss_distill_vital"] = loss_vital
+                out["reg_distill_vital"]  = reg_vital
+            out["reg_distill_pk"]     = reg_pk
 
         return out
 

@@ -1,6 +1,7 @@
 import numpy as np
 from scipy import signal
 from scipy.signal import butter, sosfiltfilt, iirnotch, filtfilt, welch
+from scipy.ndimage import uniform_filter1d
 from loguru import logger
 
 
@@ -66,22 +67,28 @@ class EEGPreprocessor:
         # 5. Signal quality index
         sqi = self._sqi(raw_ch, filtered)
 
+        amplitude_uv, dominant_hz, tonal_ratio = self._signal_diagnostics(filtered)
+
         return {
-            "raw_eeg":         raw_ch.tolist(),
-            "delta_wave":      waves["delta"].tolist(),
-            "theta_wave":      waves["theta"].tolist(),
-            "alpha_wave":      waves["alpha"].tolist(),
-            "beta_wave":       waves["beta"].tolist(),
-            "gamma_wave":      waves["gamma"].tolist(),
-            "delta_power":     powers["delta"],
-            "theta_power":     powers["theta"],
-            "alpha_power":     powers["alpha"],
-            "beta_power":      powers["beta"],
-            "gamma_power":     powers["gamma"],
-            "dsa_matrix":      dsa_db.tolist(),
-            "dsa_frequencies": freqs.tolist(),
-            "dsa_times":       times.tolist(),
-            "sqi":             sqi,
+            "raw_eeg":          raw_ch.tolist(),
+            "filtered_eeg":     filtered.tolist(),
+            "delta_wave":       waves["delta"].tolist(),
+            "theta_wave":       waves["theta"].tolist(),
+            "alpha_wave":       waves["alpha"].tolist(),
+            "beta_wave":        waves["beta"].tolist(),
+            "gamma_wave":       waves["gamma"].tolist(),
+            "delta_power":      powers["delta"],
+            "theta_power":      powers["theta"],
+            "alpha_power":      powers["alpha"],
+            "beta_power":       powers["beta"],
+            "gamma_power":      powers["gamma"],
+            "dsa_matrix":       dsa_db.tolist(),
+            "dsa_frequencies":  freqs.tolist(),
+            "dsa_times":        times.tolist(),
+            "sqi":              sqi,
+            "eeg_amplitude_uv": amplitude_uv,
+            "eeg_dominant_hz":  dominant_hz,
+            "eeg_tonal_ratio":  tonal_ratio,
         }
 
     # ── Filters ──────────────────────────────────────────────────────────────
@@ -153,10 +160,13 @@ class EEGPreprocessor:
 
     def _sqi(self, raw: np.ndarray, filtered: np.ndarray) -> float:
         """
-        Three-component SQI [0, 100]:
-          1. Flatline guard  — std < 0.1 µV → electrode off
-          2. Amplitude guard — saturation > 1000 µV or weak < 1 µV
-          3. HF artefact     — power >47 Hz vs total (EMG/ESU noise)
+        Four-component SQI [0, 100]:
+          1. Flatline guard    — std < 0.1 µV → electrode off
+          2. Amplitude guard   — saturation > 1000 µV or weak < 1 µV
+          3. HF artefact       — power >47 Hz vs total (EMG/ESU noise)
+          4. Tonal interference — single narrow-band peak dominates (e.g. 25 Hz EMI)
+             Real EEG has a broadband 1/f spectrum; if ≥40% of power sits in
+             any ±2 Hz window, this is almost certainly electrical interference.
 
         Note: high-amplitude delta during deep anesthesia (200-500 µV) is
         normal – do NOT penalise it. Only true saturation (>1000 µV) is bad.
@@ -169,28 +179,72 @@ class EEGPreprocessor:
         if max_amp > 1000.0:
             return 5.0  # saturated electrode
 
-        # Weak signal penalty only (std < 1 µV means electrode barely touching)
+        # Weak signal penalty (std < 1 µV → electrode barely touching)
         amp_score = float(np.clip(std / 1.0, 0.0, 1.0)) if std < 1.0 else 1.0
 
-        # HF noise: power > 47 Hz in raw signal vs total — EMG/ESU indicator
+        nperseg = min(self.fs, len(raw))
+        f, pxx = welch(raw, fs=self.fs, nperseg=nperseg)
+        total_power = float(pxx.sum()) + 1e-12
+
+        # HF noise: power > 47 Hz in raw signal (EMG/ESU)
         nyq = self.fs / 2.0
         if nyq > 50:
-            f, pxx = welch(raw, fs=self.fs, nperseg=min(self.fs, len(raw)))
-            hf_ratio = float(pxx[f > 47.0].sum() / (pxx.sum() + 1e-12))
-            # Gentle penalty: hf_ratio=0.3 → score=0.55; hf_ratio=0.5 → score=0.25
+            hf_ratio = float(pxx[f > 47.0].sum() / total_power)
             hf_score = float(np.clip(1.0 - hf_ratio * 1.5, 0.25, 1.0))
         else:
             hf_score = 1.0
 
-        return float(np.clip(100.0 * amp_score * hf_score, 0.0, 100.0))
+        # Tonal interference: check if any ±2 Hz window holds >40% of total power.
+        # Real EEG is broadband (1/f); a dominant narrow-band peak = EMI / bad contact.
+        # Only check in the clinical range 4–45 Hz to avoid delta burst false positives.
+        tonal_score = 1.0
+        clinical_mask = (f >= 4.0) & (f <= 45.0)
+        if clinical_mask.sum() > 4:
+            pxx_clin = pxx.copy()
+            pxx_clin[~clinical_mask] = 0.0
+            freq_step = float(f[1] - f[0]) if len(f) > 1 else 1.0
+            window_bins = max(1, int(2.0 / freq_step))   # ±2 Hz
+            running_sum = uniform_filter1d(pxx_clin, size=window_bins * 2 + 1) * (window_bins * 2 + 1)
+            peak_band_power = float(running_sum.max())
+            peak_ratio = peak_band_power / total_power
+            if peak_ratio > 0.40:
+                # Linear penalty: 0.40→score=1.0, 0.80→score=0.0 (hard limit at 5)
+                tonal_score = float(np.clip(1.0 - (peak_ratio - 0.40) * 2.5, 0.05, 1.0))
+
+        return float(np.clip(100.0 * amp_score * hf_score * tonal_score, 0.0, 100.0))
+
+    def _signal_diagnostics(self, filtered: np.ndarray) -> tuple[float, float, float]:
+        """
+        Returns (amplitude_uv, dominant_hz, tonal_ratio).
+        amplitude_uv : std of filtered signal [µV] — expect 15-80 µV for real scalp EEG
+        dominant_hz  : frequency with peak power in the 4-45 Hz clinical band
+        tonal_ratio  : fraction of total power within ±2 Hz of that peak (>0.4 = interference)
+        """
+        amplitude_uv = float(np.std(filtered))
+        nperseg = min(self.fs, len(filtered))
+        f, pxx = welch(filtered, fs=self.fs, nperseg=nperseg)
+        total = float(pxx.sum()) + 1e-12
+
+        clin = (f >= 4.0) & (f <= 45.0)
+        if clin.sum() == 0:
+            return amplitude_uv, 0.0, 0.0
+
+        peak_i = int(np.argmax(pxx[clin]))
+        peak_f = float(f[clin][peak_i])
+
+        band = (f >= peak_f - 2.0) & (f <= peak_f + 2.0)
+        tonal_ratio = float(pxx[band].sum() / total)
+
+        return amplitude_uv, peak_f, tonal_ratio
 
     @staticmethod
     def _empty_result() -> dict:
         return {
-            "raw_eeg": [], "delta_wave": [], "theta_wave": [],
+            "raw_eeg": [], "filtered_eeg": [], "delta_wave": [], "theta_wave": [],
             "alpha_wave": [], "beta_wave": [], "gamma_wave": [],
             "delta_power": 0.0, "theta_power": 0.0, "alpha_power": 0.0,
             "beta_power": 0.0, "gamma_power": 0.0,
             "dsa_matrix": [], "dsa_frequencies": [], "dsa_times": [],
             "sqi": 0.0,
+            "eeg_amplitude_uv": 0.0, "eeg_dominant_hz": 0.0, "eeg_tonal_ratio": 0.0,
         }

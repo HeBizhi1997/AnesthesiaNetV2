@@ -1,0 +1,105 @@
+
+
+/**
+* Physical layer
+* Asynchronous serial encoded as
+* 1 Start bit
+* 8 Data bits
+* 1 Stop bit
+* No parity
+* The point to point connection is RS232 serial interface
+* Baud rate: 115200
+*/	
+
+typedef enum
+{
+    DP_ID,         	//0x80   
+    DP_Length_LSB, 	//DP_CRCCordH-2
+    DP_Length_MSB,
+    DP_NSM_D1,
+    DP_NSM_D2,
+    DP_NSM_D3,
+    DP_Devicetime_Sec4,
+    DP_Devicetime_Sec3,
+    DP_Devicetime_Sec2,
+    DP_Devicetime_Sec1,
+    DP_BlockStatus,
+			//Block Status
+			//Bit 1: Electrode alarm (Lead off) 传感器脱落
+			//Bit 3: Impedance high 传感器阻抗偏大
+			//Bit 7: Electrode invalid 传感器失效
+    DP_Eventnumber,	//0:255
+    DP_Eventtype,
+			//Event Type
+			// 0 = General Event
+			// 1 = Induction
+			// 2 = Intubation
+			// 3 = Maintenance
+			// 4 = Surgery
+			// 5 = Injection
+			// 6 = Note
+			// 7 = End Maintenance
+			// 8 = Movement
+    DP_CSIValue, 	//0:99, 0xEE/0xFF(Not defined) 麻醉深度指数
+    DP_BSValue,  	//0:100, 0xFF(Not defined) 爆发抑制比
+    DP_SQIValue, 	//0:100, 0xFF(Not defined) 信号质量指数
+    DP_BlackImp, 	//1:10  15= too high impedance //Electrode 3 Impedance 第三贴片阻抗
+    DP_WhiteImp, 	//1:10  15= too high impedance //Electrode 1 Impedance 第一贴片阻抗
+    DP_EMGValue, 	//0:100, 0xFF(Not defined) 肌电信号指数
+    DP_NSM_D4,
+    DP_AlarmHigh,	//0:100 高区域报警
+    DP_AlarmLow, 	//0:100 低区域报警
+    DP_EEGValueStart,
+			//-128:127 (100 bytes) EEG脑电数据
+			//Binary EEG data, Signed byte
+			//-127 to +127 uV signal range
+    DP_NSM_D5 = DP_EEGValueStart + 100,
+    DP_NSM_D6,
+    DP_NSM_D7,
+    DP_NOXValue, 	//0:99, 0xFF(Not defined) 伤害指数
+    DP_DELTAValue, 	//δ( 1- 3Hz) Power(dB), Signed byte
+    DP_THETAValue, 	//θ( 4- 7Hz) Power(dB), Signed byte
+    DP_ALPHAValue, 	//α( 8-13Hz) Power(dB), Signed byte
+    DP_BETAValue, 	//β(14-30Hz) Power(dB), Signed byte
+    DP_GAMMAValue, 	//γ(31-44Hz) Power(dB), Signed byte
+    DP_EOGValue,	//0:100 (EOG)
+    DP_NSM_D8,
+    DP_SEFValue = DP_NSM_D8 + 44, //1:44Hz (SEF95)
+    DP_NSM_D9,
+    DP_NSM_D10  = DP_NSM_D9 + 175,
+    DP_CRCCordH,
+    DP_CRCCordL,
+} DataPackageType;
+
+static unsigned char WriteDataPackage[DP_CRCCordH+2];
+
+/** 
+ * Calculating CRC-16 in 'C' 
+ * @para addr, start of data 
+ * @para num, length of data 
+ * @para crc, incoming CRC 
+ */  
+
+#define POLY        0x1021  
+uint16_t crc16(unsigned char *addr, int num, uint16_t crc)  
+{  
+    int i;  
+    for (; num > 0; num--)               /* Step through bytes in memory */  
+    {  
+        crc = crc ^ (*addr++ << 8);      /* Fetch byte from memory, XOR into CRC top byte*/  
+        for (i = 0; i < 8; i++)          /* Prepare to rotate 8 bits */  
+        {  
+            if (crc & 0x8000)            /* b15 is set... */  
+                crc = (crc << 1) ^ POLY; /* rotate and XOR with polynomic */  
+            else                         /* b15 is clear... */  
+                crc <<= 1;               /* just rotate */  
+        }                                /* Loop for 8 bits */  
+        crc &= 0xFFFF;                   /* Ensure CRC remains 16-bit value */  
+    }                                    /* Loop until num=0 */  
+    return(crc);                         /* Return updated CRC */  
+} 
+
+uint16_t crcCode = crc16(WriteDataPackage,DP_CRCCordH,0xffff);
+WriteDataPackage[DP_CRCCordH] = (unsigned char)(crcCode>>8)&0xff;
+WriteDataPackage[DP_CRCCordL] = (unsigned char)(crcCode)&0xff;
+

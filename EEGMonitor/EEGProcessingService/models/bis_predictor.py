@@ -25,6 +25,11 @@ import numpy as np
 from loguru import logger
 from scipy.signal import butter, sosfiltfilt, iirnotch, filtfilt, resample_poly
 
+try:
+    from src.pipeline.context import EEGContext
+except ImportError:
+    EEGContext = None
+
 _MODEL_ROOT = Path(__file__).resolve().parents[3]   # tianjin/
 sys.path.insert(0, str(_MODEL_ROOT))
 
@@ -79,6 +84,10 @@ class BISPredictor:
     _WIN_SAMP   = _TARGET_FS * _WIN_SEC   # 512 samples
     _N_CHANNELS = 2
 
+    # Calibration: accumulate 60 s at 128 Hz before computing the MAD scale
+    _CALIB_SEC  = 60
+    _CALIB_SAMP = _TARGET_FS * _CALIB_SEC   # 7 680 samples
+
     def __init__(self, model_path: str | None = None, sample_rate: int = 256):
         self.input_fs   = sample_rate
         self._model     = None
@@ -92,6 +101,13 @@ class BISPredictor:
         self._buf: list[deque] = [
             deque(maxlen=self._WIN_SAMP) for _ in range(self._N_CHANNELS)
         ]
+
+        # Per-session amplitude normalisation (matches training VitalLoader.process_file)
+        # Scale = MAD / 0.6745 ≈ robust σ, computed from the first _CALIB_SEC seconds.
+        # Training divided every window by this scale → model expects unitless input ~O(1).
+        self._calib_buf: list[list[float]] = [[] for _ in range(self._N_CHANNELS)]
+        self._norm_scale: np.ndarray = np.ones(self._N_CHANNELS, dtype=np.float32)
+        self._calibrated: bool = False
 
         if _TORCH_AVAILABLE:
             self._try_load_model(model_path)
@@ -147,10 +163,14 @@ class BISPredictor:
     # ── Public API ────────────────────────────────────────────────────────────
 
     def reset_state(self):
-        """Reset rolling buffer and GRU state (call at session start)."""
+        """Reset rolling buffer, GRU state, and amplitude calibration (call at session start)."""
         for buf in self._buf:
             buf.clear()
         self._hx = None
+        self._calib_buf = [[] for _ in range(self._N_CHANNELS)]
+        self._norm_scale = np.ones(self._N_CHANNELS, dtype=np.float32)
+        self._calibrated = False
+        logger.debug("BISPredictor state + amplitude calibration reset")
 
     def predict(self, eeg_epoch: np.ndarray, band_powers: dict) -> float:
         """
@@ -189,16 +209,47 @@ class BISPredictor:
             logger.warning(f"Resample error: {e}")
             return float("nan")
 
-        # 3. Append to rolling buffer
+        # 3. Append to rolling buffer + calibration accumulator
         for i in range(resampled.shape[1]):
             for ch in range(self._N_CHANNELS):
-                self._buf[ch].append(resampled[ch, i])
+                v = float(resampled[ch, i])
+                self._buf[ch].append(v)
+                if not self._calibrated:
+                    self._calib_buf[ch].append(v)
+
+        # Compute per-session MAD scale once we have _CALIB_SEC of data.
+        # Matches VitalLoader._compute_baseline_scale (MAD / 0.6745 ≈ robust σ).
+        if not self._calibrated and len(self._calib_buf[0]) >= self._CALIB_SAMP:
+            scale = np.ones(self._N_CHANNELS, dtype=np.float32)
+            for ch in range(self._N_CHANNELS):
+                arr = np.array(self._calib_buf[ch], dtype=np.float64)
+                mad = float(np.median(np.abs(arr - np.median(arr))))
+                scale[ch] = max(mad / 0.6745, 0.1)
+            self._norm_scale = scale
+            self._calibrated = True
+            logger.info(
+                f"Amplitude calibration complete: "
+                f"σ_ch0={scale[0]:.3f} σ_ch1={scale[1]:.3f} µV"
+            )
+            self._calib_buf = [[] for _ in range(self._N_CHANNELS)]  # free memory
 
         if len(self._buf[0]) < self._WIN_SAMP:
             return float("nan")     # still warming up
 
         # 4. Extract 4-second window (2, 512)
         window = np.array([list(b) for b in self._buf], dtype=np.float64)
+
+        # 4b. Apply per-session amplitude normalisation (matching training pipeline).
+        # During the first _CALIB_SEC we use a per-window fallback (MAD of current
+        # 4-second slice) so we don't block inference entirely during calibration.
+        if self._calibrated:
+            norm = self._norm_scale.astype(np.float64)
+        else:
+            norm = np.array([
+                max(np.median(np.abs(window[ch] - np.median(window[ch]))) / 0.6745, 0.1)
+                for ch in range(self._N_CHANNELS)
+            ], dtype=np.float64)
+        window = window / norm[:, np.newaxis]
 
         # 5. Apply window filters (matching training preprocessing)
         filter_cfg = self._cfg.get("filters", {
@@ -211,7 +262,6 @@ class BISPredictor:
 
         # 6. SQI + feature extraction
         try:
-            from src.pipeline.context import EEGContext
             ctx = EEGContext(data=window, fs=float(self._TARGET_FS))
             ctx = self._sqi_comp.process(ctx)
             ctx = self._feat_ext.process(ctx)

@@ -33,6 +33,19 @@ public sealed class EEGProcessingClient : IEEGProcessingClient
         }
     }
 
+    public async Task ResetSessionAsync(CancellationToken ct = default)
+    {
+        try
+        {
+            await _http.PostAsync("reset", null, ct);
+            _logger.LogInformation("Processing session state reset");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to reset processing session (service may be offline)");
+        }
+    }
+
     public async Task<ProcessedEEGResult> ProcessChunkAsync(EEGDataChunk chunk, CancellationToken ct = default)
     {
         // Build request DTO
@@ -70,56 +83,8 @@ public sealed class EEGProcessingClient : IEEGProcessingClient
 
     private static ProcessedEEGResult DeserializeResult(string json, DateTime timestamp)
     {
-        dynamic d = JsonConvert.DeserializeObject<dynamic>(json)!;
-        var result = new ProcessedEEGResult
-        {
-            Timestamp = timestamp,
-            BIS = (double)(d.bis ?? double.NaN),
-            QNox = null,
-            SPI = null,
-            SQI = (double)(d.sqi ?? 0.0),
-            StateEntropy = (double?)(d.se),
-            ResponseEntropy = (double?)(d.re),
-            DeltaWave = ToDoubleArray(d.delta_wave),
-            ThetaWave = ToDoubleArray(d.theta_wave),
-            AlphaWave = ToDoubleArray(d.alpha_wave),
-            BetaWave = ToDoubleArray(d.beta_wave),
-            GammaWave = ToDoubleArray(d.gamma_wave),
-            RawEEG = ToDoubleArray(d.raw_eeg),
-            DeltaPower = (double)(d.delta_power ?? 0.0),
-            ThetaPower = (double)(d.theta_power ?? 0.0),
-            AlphaPower = (double)(d.alpha_power ?? 0.0),
-            BetaPower = (double)(d.beta_power ?? 0.0),
-            GammaPower = (double)(d.gamma_power ?? 0.0),
-            DSAFrequencies = ToDoubleArray(d.dsa_frequencies),
-            DSATimes = ToDoubleArray(d.dsa_times),
-            DSAMatrix = To2DArray(d.dsa_matrix),
-            HeartRate = (double?)(d.heart_rate),
-            HRV_RMSSD = (double?)(d.hrv_rmssd),
-            PulseWave = ToDoubleArray(d.pulse_wave),
-            SpO2 = (double?)(d.spo2),
-        };
-        return result;
-    }
-
-    private static double[] ToDoubleArray(dynamic? arr)
-    {
-        if (arr == null) return Array.Empty<double>();
-        var list = new List<double>();
-        foreach (var v in arr) list.Add((double)v);
-        return list.ToArray();
-    }
-
-    private static double[,] To2DArray(dynamic? matrix)
-    {
-        if (matrix == null) return new double[0, 0];
-        var rows = new List<double[]>();
-        foreach (var row in matrix) rows.Add(ToDoubleArray(row));
-        if (rows.Count == 0) return new double[0, 0];
-        var result = new double[rows.Count, rows[0].Length];
-        for (int i = 0; i < rows.Count; i++)
-            for (int j = 0; j < rows[i].Length; j++)
-                result[i, j] = rows[i][j];
+        var result = JsonConvert.DeserializeObject<ProcessedEEGResult>(json)!;
+        result.Timestamp = timestamp;
         return result;
     }
 

@@ -23,6 +23,7 @@ public sealed class RecordingService : IRecordingService
     private BinaryWriter? _rawWriter;
     private BinaryWriter? _vitalsWriter;
     private StreamWriter? _processedWriter;
+    private bool _channelCountSet;   // updated from first real sample
 
     public bool IsRecording { get; private set; }
     public RecordingSession? CurrentSession { get; private set; }
@@ -57,6 +58,7 @@ public sealed class RecordingService : IRecordingService
         _vitalsWriter = new BinaryWriter(File.Open(Path.Combine(dir, "vitals.bin"), FileMode.Create));
         _processedWriter = new StreamWriter(Path.Combine(dir, "processed.jsonl"), append: false);
 
+        _channelCountSet = false;
         SaveSessionMetadata();
         IsRecording = true;
         _logger.LogInformation("Recording session started: {SessionId} Patient={PatientId}", session.SessionId, patientId);
@@ -81,20 +83,35 @@ public sealed class RecordingService : IRecordingService
 
     public Task RecordRawSampleAsync(EEGSample sample)
     {
-        if (!IsRecording || _rawWriter == null) return Task.CompletedTask;
-        lock (_rawWriter)
+        if (!IsRecording) return Task.CompletedTask;
+
+        // Capture writer references to avoid race with StopSessionAsync
+        var rawW = _rawWriter;
+        var vitW = _vitalsWriter;
+        if (rawW == null) return Task.CompletedTask;
+
+        // Persist actual channel count from the first sample (avoids stale default of 4)
+        if (!_channelCountSet && CurrentSession != null && sample.Channels.Length > 0)
         {
-            _rawWriter.Write(sample.Timestamp.ToBinary());
-            foreach (var ch in sample.Channels) _rawWriter.Write((float)ch);
+            CurrentSession.ChannelCount  = sample.Channels.Length;
+            CurrentSession.SampleRate    = 256;
+            _channelCountSet = true;
+            SaveSessionMetadata();
         }
-        if (sample.SpO2.HasValue && _vitalsWriter != null)
+
+        lock (rawW)
         {
-            lock (_vitalsWriter)
+            rawW.Write(sample.Timestamp.ToBinary());
+            foreach (var ch in sample.Channels) rawW.Write((float)ch);
+        }
+        if (sample.SpO2.HasValue && vitW != null)
+        {
+            lock (vitW)
             {
-                _vitalsWriter.Write(sample.Timestamp.ToBinary());
-                _vitalsWriter.Write((float)(sample.SpO2 ?? 0));
-                _vitalsWriter.Write((float)(sample.HeartRate ?? 0));
-                _vitalsWriter.Write((float)(sample.PulseWaveValue ?? 0));
+                vitW.Write(sample.Timestamp.ToBinary());
+                vitW.Write((float)(sample.SpO2 ?? 0));
+                vitW.Write((float)(sample.HeartRate ?? 0));
+                vitW.Write((float)(sample.PulseWaveValue ?? 0));
             }
         }
         return Task.CompletedTask;

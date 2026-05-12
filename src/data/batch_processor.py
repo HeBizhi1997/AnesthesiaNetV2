@@ -474,10 +474,10 @@ class BatchProcessor:
             channel_feats[:, ch, col] = pe
             col += 1
 
-            # SEF95 (normalised to [0, 1])
+            # SEF95 (normalised to [0, 1] by 47 Hz EEG band upper limit)
             if self.compute_sef:
                 sef = _batch_sef95(p, freqs)
-                channel_feats[:, ch, col] = sef / self.fs * 2.0
+                channel_feats[:, ch, col] = np.clip(sef / 47.0, 0.0, 1.0)
                 col += 1
 
             # LZC

@@ -2,6 +2,7 @@ using EEGMonitor.Infrastructure.Logging;
 using EEGMonitor.Services.Events;
 using EEGMonitor.Services.Playback;
 using EEGMonitor.Services.Processing;
+using EEGMonitor.Services.PythonService;
 using EEGMonitor.Services.Recording;
 using EEGMonitor.Services.SerialPort;
 using EEGMonitor.Services.Simulation;
@@ -16,6 +17,7 @@ namespace EEGMonitor;
 public partial class App : Application
 {
     private IHost? _host;
+    private PythonServiceLauncher? _pythonLauncher;
 
     protected override void OnStartup(StartupEventArgs e)
     {
@@ -36,6 +38,15 @@ public partial class App : Application
         mainWindow.Show();
 
         Log.Information("EEGMonitor application started");
+
+        // Auto-start Python processing service in background (non-blocking)
+        _pythonLauncher = _host.Services.GetRequiredService<PythonServiceLauncher>();
+        _ = Task.Run(async () =>
+        {
+            var ok = await _pythonLauncher.EnsureRunningAsync();
+            if (!ok)
+                Log.Warning("EEG processing service could not be started automatically – start main.py manually");
+        });
     }
 
     private static void ConfigureServices(IServiceCollection services)
@@ -44,7 +55,7 @@ public partial class App : Application
         services.AddHttpClient("simulator", client =>
         {
             client.BaseAddress = new Uri("http://localhost:8765/");
-            client.Timeout = TimeSpan.FromMinutes(3); // vital file loading can be slow
+            client.Timeout = TimeSpan.FromMinutes(3);
         });
 
         // Typed client for EEG processing (short timeout)
@@ -54,12 +65,18 @@ public partial class App : Application
             client.Timeout = TimeSpan.FromSeconds(5);
         });
 
-        // Core services
-        services.AddSingleton<ISerialPortService, SerialPortService>();
+        // Serial services — register both ADS1299 and NSM
+        services.AddSingleton<SerialPortService>();
+        services.AddSingleton<NSMSerialService>();
+        services.AddSingleton<ISerialPortService>(sp => sp.GetRequiredService<SerialPortService>()); // default: ADS1299
+        services.AddSingleton<IPulseSerialService, PulseSerialService>();
         services.AddSingleton<IRecordingService, RecordingService>();
         services.AddSingleton<IPlaybackService, PlaybackService>();
         services.AddSingleton<IEventAnnotationService, EventAnnotationService>();
         services.AddSingleton<Infrastructure.Pipeline.DataPipeline>();
+
+        // Python service launcher (auto-start processing backend)
+        services.AddSingleton<PythonServiceLauncher>();
 
         // Simulation service (uses named "simulator" client + DataPipeline)
         services.AddSingleton<IVitalSimulatorService, VitalSimulatorService>();
@@ -76,12 +93,14 @@ public partial class App : Application
         base.OnExit(e);
         Log.Information("EEGMonitor shutting down");
 
-        // Run async host teardown on a background thread so we don't deadlock the
-        // UI thread, then force-exit to guarantee all lingering threads are killed.
         Task.Run(async () =>
         {
             try
             {
+                // Tear down Python service if we launched it
+                if (_pythonLauncher != null)
+                    await _pythonLauncher.DisposeAsync();
+
                 if (_host != null)
                 {
                     await _host.StopAsync(TimeSpan.FromSeconds(3)).ConfigureAwait(false);

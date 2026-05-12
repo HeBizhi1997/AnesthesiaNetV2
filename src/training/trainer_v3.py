@@ -204,7 +204,8 @@ class TrainerV3:
 
         self.history: Dict[str, list] = {k: [] for k in [
             "train_loss", "train_bis", "train_phase", "train_stim",
-            "train_pkd", "train_vitald", "train_distill_pk", "train_distill_vital", "train_trans",
+            "train_pkd", "train_vitald", "train_distill_pk", "train_distill_vital",
+            "train_reg_pk", "train_reg_vital", "train_trans",
             "val_loss", "val_mae", "val_mae_induction", "val_mae_recovery",
             "val_mae_preop", "val_mae_maint",
             "val_phase_acc", "val_stim_auroc",
@@ -261,7 +262,8 @@ class TrainerV3:
 
         accum = {k: 0.0 for k in [
             "loss", "bis_loss", "phase_loss", "stim_loss",
-            "pkd_loss", "vitald_loss", "distill_pk", "distill_vital", "trans_loss",
+            "pkd_loss", "vitald_loss", "distill_pk", "distill_vital",
+            "reg_pk", "reg_vital", "trans_loss",
         ]}
         n_batches = 0
         t0 = time.time()
@@ -311,6 +313,9 @@ class TrainerV3:
                     wave, features, sqi,
                     drug_ce=drug_ce, vitals=vitals,
                     mask_drug=mask_drug, mask_vital=mask_vital,
+                    use_vital=(cur_phase >= 3 and (
+                        self.criterion.lambda_vitald > 0 or
+                        self.criterion.lambda_distill_vital > 0)),
                 )
                 losses = self.criterion(
                     pred_bis     = out["pred_bis"],
@@ -326,6 +331,8 @@ class TrainerV3:
                     bis_vitald          = out.get("bis_vitald"),
                     loss_distill_pk     = out.get("loss_distill_pk"),
                     loss_distill_vital  = out.get("loss_distill_vital"),
+                    reg_distill_pk      = out.get("reg_distill_pk"),
+                    reg_distill_vital   = out.get("reg_distill_vital"),
                     drug_ce             = drug_ce,
                     mask_drug           = mask_drug,
                     mask_vital          = mask_vital,
@@ -342,6 +349,10 @@ class TrainerV3:
                 losses["loss"].backward()
                 torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
                 self.optimizer.step()
+
+            # EMA update teacher projections (BYOL-style, v11 fix)
+            if cur_phase >= 3:
+                self.model.distill.update_teacher_ema()
 
             bs = wave.shape[0] * wave.shape[1]
             dt = time.time() - t_step
@@ -373,6 +384,8 @@ class TrainerV3:
             "train_vitald":       accum["vitald_loss"]     / n_batches,
             "train_distill_pk":   accum["distill_pk"]      / n_batches,
             "train_distill_vital":accum["distill_vital"]   / n_batches,
+            "train_reg_pk":       accum["reg_pk"]          / n_batches,
+            "train_reg_vital":    accum["reg_vital"]       / n_batches,
             "train_trans":        accum["trans_loss"]      / n_batches,
             "throughput":         sps_acc / n_batches,
             "epoch_time_s":       elapsed,
@@ -514,7 +527,8 @@ class TrainerV3:
         hdr = (
             f"{'Timestamp':<19}  {'Ep':>4}  {'Ph':>3}  "
             f"{'TotLoss':>8}  {'BIS':>7}  {'Phase':>7}  {'Stim':>7}  "
-            f"{'PKD':>7}  {'VitalD':>7}  {'DistPK':>7}  {'DistVit':>7}  {'Trans':>7}  "
+            f"{'PKD':>7}  {'VitalD':>7}  {'DistPK':>7}  {'DistVit':>7}  "
+            f"{'RegPK':>7}  {'RegVit':>7}  {'Trans':>7}  "
             f"{'vMAE':>6}  {'vEMA':>6}  {'vInd':>6}  {'vRec':>6}  "
             f"{'PhAcc':>6}  {'StAUC':>6}  "
             f"{'LR':>9}  {'SPS':>6}  {'train_t':>7}  {'val_t':>5}  {'flag'}"
@@ -574,6 +588,8 @@ class TrainerV3:
                 ("train_vitald",        train_m.get("train_vitald", 0.0)),
                 ("train_distill_pk",    train_m["train_distill_pk"]),
                 ("train_distill_vital", train_m["train_distill_vital"]),
+                ("train_reg_pk",        train_m.get("train_reg_pk", 0.0)),
+                ("train_reg_vital",     train_m.get("train_reg_vital", 0.0)),
                 ("train_trans",         train_m["train_trans"]),
                 ("val_loss",            val_m["val_loss"]),
                 ("val_mae",             val_m["val_mae"]),
@@ -629,6 +645,8 @@ class TrainerV3:
                 f"{train_m.get('train_vitald', 0.0):>7.4f}  "
                 f"{train_m['train_distill_pk']:>7.4f}  "
                 f"{train_m['train_distill_vital']:>7.4f}  "
+                f"{train_m.get('train_reg_pk', 0):>7.4f}  "
+                f"{train_m.get('train_reg_vital', 0):>7.4f}  "
                 f"{train_m['train_trans']:>7.4f}  "
                 f"{cur_mae:>6.2f}  "
                 f"{ema_str:>6}  "

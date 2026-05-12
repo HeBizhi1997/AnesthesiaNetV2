@@ -25,6 +25,12 @@ public sealed class DataPipeline : IAsyncDisposable
     private readonly IRecordingService _recording;
     private readonly ILogger<DataPipeline> _logger;
 
+    /// <summary>
+    /// Sample rate of the connected EEG device. Set before calling Start().
+    /// Default 256 (ADS1299). NSM devices typically use 200.
+    /// </summary>
+    public int DeviceSampleRate { get; set; } = 256;
+
     private readonly Channel<EEGSample> _rawChannel;
     private readonly Channel<EEGDataChunk> _chunkChannel;
     private readonly Channel<ProcessedEEGResult> _resultChannel;
@@ -34,6 +40,15 @@ public sealed class DataPipeline : IAsyncDisposable
     private bool _stagesStarted;
 
     public event Action<ProcessedEEGResult>? ResultAvailable;
+
+    /// <summary>Latest BPM from the pulse sensor. Set by MainViewModel when BpmReceived fires.</summary>
+    public double? CurrentHeartRate { get; set; }
+
+    /// <summary>
+    /// Fired once per serial frame (64 samples) with CH1 raw-filtered data.
+    /// Delivers immediate visual feedback regardless of whether the Python service is running.
+    /// </summary>
+    public event Action<double[]>? RawChunkAvailable;
 
     public DataPipeline(
         ISerialPortService serial,
@@ -92,6 +107,20 @@ public sealed class DataPipeline : IAsyncDisposable
         EnsureStagesStarted();
         _rawChannel.Writer.TryWrite(sample);
         _ = _recording.RecordRawSampleAsync(sample);
+
+        // Raw EEG chart display (same as OnSampleReceived path)
+        if (sample.Channels.Length > 0)
+        {
+            lock (_rawDispLock)
+            {
+                _rawDispBuf[_rawDispIdx++] = sample.Channels[0];
+                if (_rawDispIdx >= 64)
+                {
+                    _rawDispIdx = 0;
+                    RawChunkAvailable?.Invoke((double[])_rawDispBuf.Clone());
+                }
+            }
+        }
     }
 
     // ── Internal ──────────────────────────────────────────────────────────────
@@ -106,10 +135,33 @@ public sealed class DataPipeline : IAsyncDisposable
         _logger.LogInformation("Pipeline stages started");
     }
 
+    private readonly double[] _rawDispBuf = new double[64];
+    private readonly object _rawDispLock = new();
+    private int _rawDispIdx;
+
     private void OnSampleReceived(EEGSample sample)
     {
+        // Enrich with latest heart rate from pulse sensor if not already present
+        var hr = CurrentHeartRate;
+        if (hr.HasValue && !sample.HeartRate.HasValue)
+            sample = sample with { HeartRate = hr };
+
         _rawChannel.Writer.TryWrite(sample);
         _ = _recording.RecordRawSampleAsync(sample);
+
+        // Collect CH1 samples for direct raw-EEG display (no Python needed)
+        if (sample.Channels.Length > 0)
+        {
+            lock (_rawDispLock)
+            {
+                _rawDispBuf[_rawDispIdx++] = sample.Channels[0];
+                if (_rawDispIdx >= 64)
+                {
+                    _rawDispIdx = 0;
+                    RawChunkAvailable?.Invoke((double[])_rawDispBuf.Clone());
+                }
+            }
+        }
     }
 
     // Stage 1 – buffer individual samples into 1-second epoch chunks
@@ -128,7 +180,7 @@ public sealed class DataPipeline : IAsyncDisposable
                         StartTime = buffer[0].Timestamp,
                         EndTime = buffer[^1].Timestamp,
                         Samples = buffer.ToList(),
-                        SampleRate = 256,
+                        SampleRate = DeviceSampleRate,
                         ChannelCount = buffer[0].Channels.Length,
                     }, _cts.Token);
                     buffer.Clear();

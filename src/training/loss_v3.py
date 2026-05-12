@@ -148,7 +148,7 @@ class MultiTaskLossV3(nn.Module):
         self,
         lambda_bis:           float = 1.0,
         lambda_phase:         float = 0.3,   # 理论 §4.2：相位标签误差大，不宜过强
-        lambda_stim:          float = 0.5,   # 理论 §4.2：CV 标签质量高，可加强
+        lambda_stim:          float = 0.15,  # v11: 0.5→0.15 (stim:BIS gradient 7:1→1.2:1)
         lambda_pkd:           float = 0.4,   # 理论 §4.2：辅助头需要足够梯度
         lambda_vitald:        float = 0.4,   # VitalDHead BIS 预测（修复 v9 VitalEncoder 无梯度缺陷）
         lambda_distill_pk:    float = 0.2,   # 理论 §4.2：蒸馏是正则化，须 < λ_bis
@@ -158,8 +158,8 @@ class MultiTaskLossV3(nn.Module):
         vel_threshold:        float = 0.2,   # ce_velocity 过渡期阈值
         huber_delta:          float = 0.05,  # 理论 §2.6：δ=5 BIS pts（归一化空间 0.05）
         focal_gamma:          float = 2.0,
-        focal_alpha:          float = 0.99,
-        stim_pos_weight:      float = 99.0,
+        focal_alpha:          float = 0.5,    # v8 validated; 0.99→9801:1 gradient ratio (broken)
+        stim_pos_weight:      float = 15.0,   # v8 validated; 99→9801:1 gradient ratio (broken)
         phase2_start_epoch:   int   = 31,
         phase3_start_epoch:   int   = 61,
         stim_warmup_epochs:   int   = 5,    # v10: Phase2切换时 stim 线性热身 epoch 数
@@ -218,6 +218,8 @@ class MultiTaskLossV3(nn.Module):
         bis_vitald:   Optional[torch.Tensor] = None,  # (B,T,1) Vital 辅助 BIS（v3 fix）
         loss_distill_pk:    Optional[torch.Tensor] = None,  # 标量
         loss_distill_vital: Optional[torch.Tensor] = None,  # 标量
+        reg_distill_pk:     Optional[torch.Tensor] = None,  # 标量（教师方差正则化）
+        reg_distill_vital:  Optional[torch.Tensor] = None,  # 标量（教师方差正则化）
         drug_ce:      Optional[torch.Tensor] = None,  # (B,T,6) 用于 L_trans
         mask_drug:    Optional[torch.Tensor] = None,  # (B,T)
         mask_vital:   Optional[torch.Tensor] = None,  # (B,T) Vital 数据可用性
@@ -283,6 +285,8 @@ class MultiTaskLossV3(nn.Module):
                 "pkd_loss":      pred_bis.new_zeros(1).squeeze().detach(),
                 "distill_pk":    pred_bis.new_zeros(1).squeeze().detach(),
                 "distill_vital": pred_bis.new_zeros(1).squeeze().detach(),
+                "reg_pk":        pred_bis.new_zeros(1).squeeze().detach(),
+                "reg_vital":     pred_bis.new_zeros(1).squeeze().detach(),
                 "trans_loss":    pred_bis.new_zeros(1).squeeze().detach(),
                 "curriculum_phase": pred_bis.new_tensor(cur_phase),
             }
@@ -317,6 +321,12 @@ class MultiTaskLossV3(nn.Module):
         distill_vital_err = loss_distill_vital if loss_distill_vital is not None \
                             else pred_bis.new_zeros(1).squeeze()
 
+        # 5b. 教师方差正则化（防止投影坍塌到常数，v11 新增）
+        reg_pk_err    = reg_distill_pk    if reg_distill_pk    is not None \
+                        else pred_bis.new_zeros(1).squeeze()
+        reg_vital_err = reg_distill_vital if reg_distill_vital is not None \
+                        else pred_bis.new_zeros(1).squeeze()
+
         # 6. L_trans：CE 方向约束
         trans_err = pred_bis.new_zeros(1).squeeze()
         if drug_ce is not None and mask_drug is not None:
@@ -349,7 +359,9 @@ class MultiTaskLossV3(nn.Module):
             self.lambda_vitald        * vitald_err        +
             self.lambda_distill_pk    * distill_pk_err   +
             self.lambda_distill_vital * distill_vital_err +
-            self.lambda_trans         * trans_err
+            self.lambda_trans         * trans_err         +
+            0.01                      * reg_pk_err        +   # small fixed weight
+            0.01                      * reg_vital_err         # small fixed weight
         )
         total = main_total + aux_total
 
@@ -362,6 +374,8 @@ class MultiTaskLossV3(nn.Module):
             "vitald_loss":   vitald_err.detach(),
             "distill_pk":    distill_pk_err.detach(),
             "distill_vital": distill_vital_err.detach(),
+            "reg_pk":        reg_pk_err.detach(),
+            "reg_vital":     reg_vital_err.detach(),
             "trans_loss":    trans_err.detach(),
             "curriculum_phase": pred_bis.new_tensor(cur_phase),
         }

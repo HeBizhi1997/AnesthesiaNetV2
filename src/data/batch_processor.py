@@ -178,34 +178,25 @@ def _batch_permutation_entropy(
 
 def _batch_lzc(windows_2d: np.ndarray) -> np.ndarray:
     """
-    Lempel-Ziv Complexity for N windows.
+    Lempel-Ziv Complexity for N windows (Kaspar & Schuster, 1987).
     Binary signal: above/below median per window.
-    Returns (N,) normalised values.
+    Uses string-based search matching features.py _lzc implementation exactly.
     """
     N, n = windows_2d.shape
     medians = np.median(windows_2d, axis=1, keepdims=True)
-    binary = (windows_2d > medians).astype(np.uint8)   # (N, n)
+    binary = (windows_2d > medians).astype(np.uint8)
     norm = n / np.log2(n + 1e-12) if n > 1 else 1.0
 
     lzc_vals = np.empty(N, dtype=np.float32)
     for i in range(N):
-        s = binary[i]
-        c = 1
-        l = 1
-        j = 1
-        # Build sub-string lookup from a set (O(n) amortised)
-        seen: set = set()
-        k = 0
-        while j + l <= n:
-            sub = s[j: j + l].tobytes()
-            if sub in seen or s[k: k + l].tobytes() == sub:
-                # extend current component
+        s = "".join(map(str, binary[i]))
+        c, l, pos = 1, 1, 1
+        while pos + l <= n:
+            if s[pos: pos + l] in s[:pos]:
                 l += 1
             else:
                 c += 1
-                seen.add(s[k: k + l].tobytes())
-                k = j
-                j += l
+                pos += l
                 l = 1
         lzc_vals[i] = c / norm
     return lzc_vals
@@ -365,6 +356,7 @@ class BatchProcessor:
         #
         # v9  config (standard bands only):          feats_per_ch=11  →  n_feat=24
         # v10 config (+ spectral_slope + gamma_emg): feats_per_ch=13  →  n_feat=28
+        # v13 config (+slow_osc -DFA +sigma +zcr +hjorth): feats_per_ch=18 → n_feat=38
         #
         # 特征顺序（每通道）：
         #   [0-4]  relative band powers (δ θ α β γ)
@@ -374,11 +366,11 @@ class BatchProcessor:
         #   [8-10] multi-threshold BSR
         #   [11]   spectral_slope    (EMG 指标：谱斜率，1=EEG-like，0=EMG-like)
         #   [12]   gamma_emg_ratio   (EMG 指标：gamma 段污染比)
-        # 末尾两维（跨通道）：
-        #   [-2]   alpha asymmetry
-        #   [-1]   mean SQI
-        #
-        # 与 FeatureExtractor（推理路径）特征顺序完全一致，确保训练/推理不偏移。
+        #   [13]   sigma_power       (12-15Hz spindle band)
+        #   [14]   slow_oscillation  (0.1-0.5Hz, deep anesthesia biomarker)
+        #   [15]   zero_crossing_rate (归一化过零率)
+        #   [16]   hjorth_mobility    (均值频率代理)
+        #   [17]   hjorth_complexity  (信号带宽)
     """
 
     # 只使用标准 EEG 频段（extras 已由 spectral_slope / gamma_emg_ratio 替代）
@@ -403,6 +395,12 @@ class BatchProcessor:
         # v10 EMG 分离算法特征（在低通截止内可靠计算）
         self.compute_slope       = feat_cfg.get("spectral_slope", False)
         self.compute_gamma_ratio = feat_cfg.get("gamma_emg_ratio", False)
+        # v12 advanced features
+        self.compute_sigma       = feat_cfg.get("sigma_power", False)
+        self.compute_slow        = feat_cfg.get("slow_oscillation", False)  # replaces DFA
+        self.compute_zcr         = feat_cfg.get("zero_crossing_rate", False)
+        self.compute_hjorth_mob  = feat_cfg.get("hjorth_mobility", False)
+        self.compute_hjorth_comp = feat_cfg.get("hjorth_complexity", False)
 
         self.kurtosis_thresh        = sqi_cfg.get("kurtosis_thresh", 5.0)
         self.high_freq_ratio_thresh = sqi_cfg.get("high_freq_ratio_thresh", 0.4)
@@ -420,6 +418,12 @@ class BatchProcessor:
             n += 1
         if self.compute_gamma_ratio:
             n += 1
+        # v12 advanced features
+        if self.compute_sigma:       n += 1
+        if self.compute_slow:        n += 1
+        if self.compute_zcr:         n += 1
+        if self.compute_hjorth_mob:  n += 1
+        if self.compute_hjorth_comp: n += 1
         return n
 
     def compute(
@@ -503,6 +507,54 @@ class BatchProcessor:
             if self.compute_gamma_ratio:
                 gamma_r = _batch_gamma_emg_ratio(p, freqs)  # (N,)
                 channel_feats[:, ch, col] = gamma_r
+                col += 1
+
+            # v12: sigma power (12-15 Hz spindle band)
+            if self.compute_sigma:
+                s_mask = (freqs >= 12.0) & (freqs < 15.0)
+                sigma_p = (p[:, s_mask].sum(axis=1) / (p.sum(axis=1) + 1e-12)).astype(np.float32)
+                channel_feats[:, ch, col] = sigma_p
+                col += 1
+
+            # v13: slow oscillation power — deep anesthesia biomarker
+            # Welch PSD with nperseg=256 gives 0.5Hz resolution. The 0.5Hz bin
+            # (index 1, covers 0.25-0.75Hz) captures the slow/delta transition.
+            # After Welch detrending, DC is removed so bin 0 is ~zero.
+            # Replaces DFA which is mathematically unreliable on 4-second windows.
+            if self.compute_slow:
+                so_mask = (freqs > 0.0) & (freqs <= 0.5)
+                so_power = (p[:, so_mask].sum(axis=1) / (p.sum(axis=1) + 1e-12)).astype(np.float32)
+                channel_feats[:, ch, col] = so_power
+                col += 1
+
+            # v12: zero crossing rate (vectorized)
+            if self.compute_zcr:
+                zcr_vals = np.zeros(N, dtype=np.float32)
+                for i in range(N):
+                    sign_changes = np.sum(np.abs(np.diff(np.signbit(x[i])))) / 2.0
+                    zcr_vals[i] = np.clip(sign_changes / (x.shape[1] / self.fs) / (self.fs / 2), 0.0, 1.0)
+                channel_feats[:, ch, col] = zcr_vals
+                col += 1
+
+            # v12: Hjorth mobility (vectorized: sqrt(var(dx)/var(x)))
+            if self.compute_hjorth_mob:
+                dx = np.diff(x, axis=1)
+                var_x = np.var(x, axis=1) + 1e-12
+                var_dx = np.var(dx, axis=1) + 1e-12
+                mob = np.sqrt(var_dx / var_x).astype(np.float32)
+                channel_feats[:, ch, col] = mob
+                col += 1
+
+            # v12: Hjorth complexity
+            if self.compute_hjorth_comp:
+                dx = np.diff(x, axis=1)
+                ddx = np.diff(dx, axis=1)
+                var_dx = np.var(dx, axis=1) + 1e-12
+                var_ddx = np.var(ddx, axis=1) + 1e-12
+                mob_dx = np.sqrt(var_ddx / var_dx)
+                mob_x = np.sqrt(var_dx / (np.var(x, axis=1) + 1e-12))
+                comp = (mob_dx / (mob_x + 1e-12)).astype(np.float32)
+                channel_feats[:, ch, col] = comp
                 col += 1
 
         # ── Inter-channel features ────────────────────────────────────────

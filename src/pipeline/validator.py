@@ -265,8 +265,15 @@ class PipelineValidator:
         fcfg = cfg.get("features", {})
         n_bsr = len(fcfg.get("bsr_thresholds_uv", [2.0, 5.0, 10.0]))
         n_pac = 1 if fcfg.get("pac", False) else 0
-        # 5 bands + PE + SEF95 + LZC + N×BSR + PAC
-        self.feats_per_ch = 5 + 1 + 1 + 1 + n_bsr + n_pac
+        # 5 bands + PE + SEF95 + LZC + N×BSR + slope + gemg + sigma + dfa + zcr + hmob + hcomp + PAC
+        n_slope = 1 if fcfg.get("spectral_slope", False) else 0
+        n_gemg  = 1 if fcfg.get("gamma_emg_ratio", False) else 0
+        n_sigma = 1 if fcfg.get("sigma_power", False) else 0
+        n_slow  = 1 if fcfg.get("slow_oscillation", False) else 0
+        n_zcr   = 1 if fcfg.get("zero_crossing_rate", False) else 0
+        n_hmob  = 1 if fcfg.get("hjorth_mobility", False) else 0
+        n_hcomp = 1 if fcfg.get("hjorth_complexity", False) else 0
+        self.feats_per_ch = 5 + 1 + 1 + 1 + n_bsr + n_slope + n_gemg + n_sigma + n_slow + n_zcr + n_hmob + n_hcomp + n_pac
 
         n_ch = len(cfg["eeg"]["channels"])
         # total = per_ch × n_channels + 2 inter-channel (asymmetry + SQI)

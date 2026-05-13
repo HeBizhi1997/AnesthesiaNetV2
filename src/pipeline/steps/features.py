@@ -1,24 +1,25 @@
 """
-Feature extraction step.
-
-Computes a fixed-length feature vector from the (filtered) EEG window.
+Feature extraction step — v12 (38-dim with advanced features).
 
 特征顺序（每通道，与 BatchProcessor 完全一致）：
-  [0-4]  relative band powers (δ θ α β γ)
-  [5]    Permutation Entropy (PE)
-  [6]    Spectral Edge Frequency 95% (SEF95, 归一化到 [0,1])
-  [7]    Lempel-Ziv Complexity (LZC, binarised)
-  [8-10] multi-threshold Burst Suppression Ratio (BSR)
-  [11]   spectral_slope    (EMG 指标：1/f 谱斜率，1=EEG-like，0=EMG-like)
-  [12]   gamma_emg_ratio   (EMG 指标：P(30-47 Hz) / P(0.5-47 Hz))
-  [13]   PAC modulation index (仅 pac=true 时添加，默认不启用)
+  [0-4]   relative band powers (δ θ α β γ)
+  [5]     Permutation Entropy (PE)
+  [6]     SEF95 (normalised to [0,1] by 47 Hz)
+  [7]     Lempel-Ziv Complexity (LZC)
+  [8-10]  multi-threshold Burst Suppression Ratio (BSR: 2/5/10 uV)
+  [11]    spectral_slope (1/f exponent, 1=EEG-like 0=EMG-like)
+  [12]    gamma_emg_ratio (P[30-47] / P[0.5-47])
+  [13]    sigma_power (12-15 Hz spindle band)
+  [14]    slow_oscillation (0.1-0.5 Hz, deep anesthesia biomarker)
+  [15]    zero_crossing_rate (normalised to [0,1])
+  [16]    hjorth_mobility (mean frequency proxy)
+  [17]    hjorth_complexity (signal bandwidth)
 
 跨通道特征（末尾）：
   alpha asymmetry (log ratio Fp1/Fp2)
   mean SQI
 
-总维度（v10，2 通道，pac=false）：13 × 2 + 2 = 28
-总维度（v9,  2 通道，pac=false）：11 × 2 + 2 = 24
+总维度（v12，2ch）：18 × 2 + 2 = 38
 
 BatchProcessor（离线预处理）与 FeatureExtractor（实时推理）使用相同计算，
 确保训练特征与推理特征逐位对齐，不产生偏移。
@@ -33,6 +34,9 @@ from scipy.signal import hilbert as sp_hilbert
 
 from ..base import EEGStep
 from ..context import EEGContext
+from .advanced_features import (
+    zero_crossing_rate, hjorth_mobility, hjorth_complexity
+)
 
 
 # ------------------------------------------------------------------ #
@@ -198,6 +202,14 @@ def _spectral_slope(pxx: np.ndarray, freqs: np.ndarray,
     return float(np.clip(-slope / 4.0, 0.0, 1.0))
 
 
+def _sigma_power_ratio(pxx: np.ndarray, freqs: np.ndarray,
+                       sigma_lo: float = 12.0, sigma_hi: float = 15.0) -> float:
+    """Relative power in sigma (spindle) band: 12-15 Hz."""
+    mask = (freqs >= sigma_lo) & (freqs < sigma_hi)
+    total = pxx.sum() + 1e-12
+    return float(pxx[mask].sum() / total)
+
+
 def _gamma_emg_ratio(pxx: np.ndarray, freqs: np.ndarray,
                      gamma_lo: float = 30.0, gamma_hi: float = 47.0,
                      low_lo: float = 0.5,   low_hi: float = 30.0) -> float:
@@ -249,6 +261,12 @@ class FeatureExtractor(EEGStep):
         # PAC: alpha-gamma 相位-幅度耦合（丙泊酚敏感，默认关闭）
         # 注意：PAC 不在 BatchProcessor 中实现，开启后需同步更新 BatchProcessor
         self.compute_pac = cfg.get("pac", False)
+        # v12 advanced features
+        self.compute_sigma        = cfg.get("sigma_power", False)
+        self.compute_slow         = cfg.get("slow_oscillation", False)  # replaces DFA
+        self.compute_zcr          = cfg.get("zero_crossing_rate", False)
+        self.compute_hjorth_mob   = cfg.get("hjorth_mobility", False)
+        self.compute_hjorth_comp  = cfg.get("hjorth_complexity", False)
 
     def _channel_features(self, x: np.ndarray) -> np.ndarray:
         """
@@ -263,6 +281,11 @@ class FeatureExtractor(EEGStep):
           [11]   spectral_slope    (若 compute_slope=True)
           [12]   gamma_emg_ratio   (若 compute_gamma_ratio=True)
           [13]   PAC               (若 compute_pac=True，默认关闭)
+          [13+n_pac]    sigma_power         (v12 新增)
+          [14+n_pac]    slow_oscillation     (v13: 0.1-0.5Hz, 替代 DFA)
+          [15+n_pac]    zero_crossing_rate   (v12 新增)
+          [16+n_pac]    hjorth_mobility      (v12 新增)
+          [17+n_pac]    hjorth_complexity    (v12 新增)
         """
         nperseg = min(256, len(x))
         freqs, pxx = welch(x, fs=self.fs, nperseg=nperseg)
@@ -304,6 +327,27 @@ class FeatureExtractor(EEGStep):
         # PAC: alpha-gamma modulation index (disabled by default)
         if self.compute_pac:
             feats.append(_pac_modulation_index(x, self.fs))
+
+        # v12: advanced features
+        if self.compute_sigma:
+            feats.append(_sigma_power_ratio(pxx, freqs))
+
+        if self.compute_slow:
+            # Slow oscillation power (0.5 Hz Welch bin, covers 0.25-0.75 Hz)
+            # Deep anesthesia biomarker — Steriade 1993
+            # After Welch detrending DC is removed; 0.5 Hz bin is lowest non-DC
+            so_mask = (freqs > 0.0) & (freqs <= 0.5)
+            total_p = pxx.sum() + 1e-12
+            feats.append(float(pxx[so_mask].sum() / total_p))
+
+        if self.compute_zcr:
+            feats.append(zero_crossing_rate(x, self.fs))
+
+        if self.compute_hjorth_mob:
+            feats.append(hjorth_mobility(x))
+
+        if self.compute_hjorth_comp:
+            feats.append(hjorth_complexity(x))
 
         return np.array(feats, dtype=np.float32)
 
@@ -348,6 +392,12 @@ class FeatureExtractor(EEGStep):
             n += 1
         if self.compute_pac:
             n += 1
+        # v12 advanced features
+        if self.compute_sigma:       n += 1
+        if self.compute_slow:        n += 1
+        if self.compute_zcr:         n += 1
+        if self.compute_hjorth_mob:  n += 1
+        if self.compute_hjorth_comp: n += 1
         return n
 
     @property
@@ -362,11 +412,56 @@ class FeatureExtractor(EEGStep):
         """Return total feature vector length for a given number of EEG channels."""
         return self.feats_per_channel * n_channels + 2   # +2: asymmetry + SQI
 
+    def _feature_offset(self, name: str) -> int:
+        """Return the per-channel index of a named feature (derived from config flags)."""
+        offset = 5 + 1   # bands + PE
+        if self.compute_sef:         offset += 1
+        if self.compute_lzc:         offset += 1
+        if self.compute_bsr:         offset += len(self.bsr_thresholds)
+        if self.compute_slope:       offset += 1
+        if self.compute_gamma_ratio: offset += 1
+        if self.compute_pac:         offset += 1
+        if name == "spectral_slope":     return offset - (1 if self.compute_slope else 0)
+        if name == "gamma_emg_ratio":    return offset - (1 if self.compute_gamma_ratio else 0)
+        if name == "pac":                return offset - (1 if self.compute_pac else 0)
+        if self.compute_sigma:       offset += 1
+        if name == "sigma_power":        return offset - 1
+        if self.compute_slow:        offset += 1
+        if name == "slow_oscillation":   return offset - 1
+        if self.compute_zcr:         offset += 1
+        if name == "zero_crossing_rate": return offset - 1
+        if self.compute_hjorth_mob:  offset += 1
+        if name == "hjorth_mobility":    return offset - 1
+        if self.compute_hjorth_comp: offset += 1
+        if name == "hjorth_complexity":  return offset - 1
+        raise ValueError(f"Unknown feature name: {name}")
+
+    _VALIDATE_FLAGS = {
+        "spectral_slope":      "compute_slope",
+        "gamma_emg_ratio":     "compute_gamma_ratio",
+        "sigma_power":         "compute_sigma",
+        "slow_oscillation":    "compute_slow",
+        "zero_crossing_rate":  "compute_zcr",
+        "hjorth_mobility":     "compute_hjorth_mob",
+        "hjorth_complexity":   "compute_hjorth_comp",
+    }
+
+    def _validate_feature_range(self, ctx: EEGContext, name: str, lo: float, hi: float) -> None:
+        flag = self._VALIDATE_FLAGS.get(name)
+        if flag is None or not getattr(self, flag, False):
+            return
+        idx = self._feature_offset(name)
+        stride = self.feats_per_channel
+        for ch in range(ctx.n_channels):
+            val = float(ctx.features[ch * stride + idx])
+            if not (lo <= val <= hi):
+                raise ValueError(f"Ch{ch} {name}={val:.3f} outside [{lo},{hi}].")
+
     def validate(self, ctx: EEGContext) -> None:
         assert ctx.features is not None, "FeatureExtractor did not set ctx.features"
         if np.isnan(ctx.features).any():
             raise ValueError("FeatureExtractor produced NaN features.")
-        n_bands = len(self.BAND_NAMES)   # 5
+        n_bands = len(self.BAND_NAMES)
         stride  = self.feats_per_channel
         for ch in range(ctx.n_channels):
             offset   = ch * stride
@@ -376,15 +471,6 @@ class FeatureExtractor(EEGStep):
                     f"Ch{ch} band power sum={band_sum:.3f} not in [0.3, 1.3]. "
                     f"Relative power normalisation may have failed."
                 )
-        # EMG 特征范围校验
-        if self.compute_slope:
-            for ch in range(ctx.n_channels):
-                slope_idx = ch * stride + n_bands + 1 + \
-                    (1 if self.compute_sef else 0) + \
-                    (1 if self.compute_lzc else 0) + \
-                    (len(self.bsr_thresholds) if self.compute_bsr else 0)
-                slope_val = float(ctx.features[slope_idx])
-                if not (0.0 <= slope_val <= 1.0):
-                    raise ValueError(
-                        f"Ch{ch} spectral_slope={slope_val:.3f} outside [0,1]."
-                    )
+        self._validate_feature_range(ctx, "spectral_slope", 0.0, 1.0)
+        self._validate_feature_range(ctx, "sigma_power", 0.0, 1.0)
+        self._validate_feature_range(ctx, "zero_crossing_rate", 0.0, 1.0)

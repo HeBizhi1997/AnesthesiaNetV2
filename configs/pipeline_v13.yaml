@@ -1,0 +1,189 @@
+# EEG Pipeline Configuration v13 — MERIDIAN v13
+#
+# v13 架构优化（基于 v12 训练分析 + 医学/数学原理评估）：
+#
+#   1. slow_oscillation 替代 DFA
+#      - DFA α 在4秒窗口上数学不可靠（scale跨度仅1.5 decades, 系统偏置α>1）
+#      - 慢振荡功率(0.1-0.5Hz)是深麻醉关键生物标志物（Steriade 1993）
+#      - 与0.1Hz highpass协调：之前0.1-0.5Hz被保留但未被任何特征捕获
+#      - feature_dim 保持 38（1-for-1 swap）
+#
+#   2. Phase 权重 sqrt(逆频率) 替代纯逆频率（loss_v3.py 修复）
+#      - 旧权重 maintenance(97.2%) = 0.0094 → 97%数据零梯度
+#      - 新权重 maintenance = 0.12 → 梯度比 319:1 → 17.9:1
+#
+#   3. Stim anti-decay（Phase 1 微量 λ_stim=0.001）
+#      - 旧设计: Phase 1 30 epochs stim head 无训练 → StAUC 0.66→0.51
+#      - 新设计: 微量 stim 梯度防止权重退化，不影响 BIS 收敛
+#
+#   4. T_0=15, phase2_start=15（匹配实际收敛速度）
+#      - v12 观察: bis_loss 在 ep7 平台期, ep8-30 低LR零进展
+#      - T_0=15 使 cosine restart 逼近收敛点，减少无效训练时间
+#
+#   5. lambda_phase: 0.05 → 0.03（sqrt 权重下 phase 梯度贡献更高）
+#
+#   重建命令：
+#     python scripts/preprocess_data.py --config configs/pipeline_v13.yaml --v3
+#     python scripts/train.py --config configs/pipeline_v13.yaml
+
+eeg:
+  channels: ["BIS/EEG1_WAV", "BIS/EEG2_WAV"]
+  srate: 128
+
+labels:
+  tracks: ["BIS/BIS", "BIS/SQI", "BIS/SR"]
+  target: "BIS/BIS"
+  sqi_track: "BIS/SQI"
+  sr_track: "BIS/SR"
+
+windowing:
+  window_sec: 4
+  stride_sec: 1
+  label_lag_sec: 15
+  min_valid_label: 10
+  max_valid_label: 100
+  baseline_sec: 60
+
+normalization:
+  use_band_ratio: true
+  delta_dominance_thresh: 0.90
+  alpha_beta_band_hz: [8.0, 30.0]
+
+sqi:
+  min_score: 0.5
+  kurtosis_thresh: 5.0
+  high_freq_ratio_thresh: 0.4
+
+filters:
+  median_kernel_ms: 20
+  highpass_hz: 0.1
+  lowpass_hz: 47.0
+  notch_hz: [60.0]
+  notch_q: 30.0
+
+wavelet:
+  wavelet: "db4"
+  level: 5
+  esu_energy_thresh: 3.0
+
+features:
+  bands:
+    delta: [0.5, 4.0]
+    theta: [4.0, 8.0]
+    alpha: [8.0, 13.0]
+    beta:  [13.0, 30.0]
+    gamma: [30.0, 47.0]
+  permutation_entropy:
+    order: 6
+    delay: 1
+  sef95: true
+  lzc: true
+  bsr: true
+  bsr_thresholds_uv: [2.0, 5.0, 10.0]
+  # v11 EMG separation features
+  spectral_slope: true
+  gamma_emg_ratio: true
+  # v12/v13 advanced features
+  sigma_power: true           # 12-15Hz spindle band
+  slow_oscillation: true      # v13: 0.1-0.5Hz slow oscillation (replaces DFA)
+  dfa_alpha: false            # v13: disabled — mathematically unreliable on 4s windows
+  zero_crossing_rate: true    # time-domain frequency
+  hjorth_mobility: true       # mean frequency proxy
+  hjorth_complexity: true     # signal bandwidth
+  pac: false
+
+model:
+  cnn_channels: [32, 64, 128]
+  cnn_kernel: 7
+  feature_dim: 38
+  # = 5 bands + PE + SEF95 + LZC + BSRx3 + slope + gemg + sigma + slow_osc + zcr + hjorth_mob + hjorth_comp = 18/ch
+  # 18 x 2ch + 2 (asym + SQI) = 38; feat_proj input = 38 + 2(SQI) = 40
+  d_model: 128
+  gru_layers: 2
+  gru_dropout: 0.15
+  lnn_backend: "gru"
+  sqi_inertia_threshold: 0.5
+  bsr_layer: true
+  grad_checkpoint: true
+
+  pk_hidden: 64
+  vital_hidden: 64
+  d_proj: 64
+
+training:
+  model_version: "v3"
+
+  # Sequence parameters
+  seq_len: 300
+  seq_stride: 150
+
+  # Data quality filtering
+  case_std_pct_low: 10
+  case_std_pct_high: 90
+  min_seq_std: 0.0
+  balance_bis: false
+
+  # v13: phases aligned to T_0=15 cosine cycle
+  # Phase 1 (ep1-14): BIS + phase + anti-decay stim
+  # Phase 2 (ep15-34): + stim full training (linear warmup ep15-19)
+  # Phase 3 (ep35+):   + multi-modal distillation
+  phase2_start_epoch: 15
+  phase3_start_epoch: 35
+
+  # Loss weights
+  lambda_bis:   2.0
+  lambda_phase: 0.03   # v13: 0.05→0.03 — sqrt weights 给 phase 更多梯度, 需降低防止盖过 BIS
+  lambda_stim:  0.15
+
+  # Auxiliary (Phase 3)
+  lambda_pkd:           0.3
+  lambda_vitald:        0.0    # disabled
+  lambda_distill_pk:    0.03
+  lambda_distill_vital: 0.0    # disabled
+  lambda_trans:         0.3
+
+  transition_boost: 2.0
+  vel_threshold:    0.2
+
+  # Stim detection
+  focal_alpha:     0.5
+  stim_pos_weight: 15.0
+  focal_gamma:     2.0
+
+  # Adaptive weights
+  use_auto_weight:  false
+  auto_weight_temp: 0.5
+
+  # Transition oversampling
+  transition_upsample_factor: 2
+
+  # Optimizer
+  batch_size: 32
+  lr: 1.0e-4
+  epochs: 200
+  patience: 70
+
+  # v13: T_0=15 matches actual convergence (bis plateaus at ep7, LR~8.7e-5)
+  # Restarts at ep15,30,45,... = Phase boundaries
+  lr_T0:     15
+  lr_eta_min: 1.0e-6
+
+  # Warmup
+  stim_warmup_epochs:   5    # Phase2: stim warmup ep15→ep19
+  phase3_warmup_epochs: 5    # Phase3: distillation warmup ep35→ep39
+
+  # Other
+  noise_std: 0.05
+  val_split: 0.15
+  test_split: 0.1
+  seed: 42
+  steps_per_epoch: null
+  n_prefetch: 4
+  huber_delta: 0.10
+
+paths:
+  raw_data: "raw_data"
+  preprocessed: "outputs/preprocessed"
+  checkpoints: "outputs/checkpoints/v13"
+  logs: "outputs/logs/v13"
+  multimodal_h5: "outputs/preprocessed/dataset_v3_v13.h5"

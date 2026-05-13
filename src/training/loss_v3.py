@@ -29,16 +29,23 @@ import torch.nn.functional as F
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 相位类别权重（与 v2 相同）
-# pre_op=2.3%, induction=0.3%, maintenance=95.9%, recovery=1.5%
+# 相位类别权重 — sqrt(逆频率) 归一化
+#
+# 原纯逆频率权重 [0.39, 3.00, 0.0094, 0.60] 导致 maintenance(97.2%) 权重仅
+# induction(0.3%) 的 1/320。模型在 epoch 2 后将 maintenance p→0.9999，
+# 加权CE→0，97%数据零梯度 → phase head 形同虚设。
+#
+# sqrt(逆频率) 将梯度比从 319:1 降至 17.9:1，保持少数类上采样效应同时
+# 让多数类对训练有实际贡献。
 # ─────────────────────────────────────────────────────────────────────────────
-_RAW_WEIGHTS = torch.tensor([
-    1.0 / 0.023,
-    1.0 / 0.003,
-    1.0 / 0.959,
-    1.0 / 0.015,
+_SQRT_INV_FREQ = torch.tensor([
+    (1.0 / 0.023) ** 0.5,   # pre_op:     sqrt(43.5) = 6.59
+    (1.0 / 0.003) ** 0.5,   # induction:  sqrt(333)  = 18.26
+    (1.0 / 0.959) ** 0.5,   # maintenance: sqrt(1.04) = 1.02
+    (1.0 / 0.015) ** 0.5,   # recovery:   sqrt(66.7) = 8.16
 ], dtype=torch.float32)
-_PHASE_WEIGHTS = _RAW_WEIGHTS / _RAW_WEIGHTS.sum() * 4.0
+_PHASE_WEIGHTS = _SQRT_INV_FREQ / _SQRT_INV_FREQ.sum() * 4.0
+# Result: [0.78, 2.15, 0.12, 0.96] — maintenance 权重从 0.0094 提升 12.8x
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -249,14 +256,19 @@ class MultiTaskLossV3(nn.Module):
             weight=self.phase_weights.to(ph_logits_flat.device),
         )
 
-        # ── 3. L_stim：Focal 损失 (Phase 2+，线性热身) ───────────────────────
-        # v10: stim 在 Phase 2 开始时线性从 0 升到 lambda_stim（防止阶跃激活冲击 BIS 头）
-        # ep31: ramp=0/5=0  ep32: 0.2  ep33: 0.4  ep34: 0.6  ep35: 0.8  ep36+: 1.0
+        # ── 3. L_stim：Focal 损失 (Phase 2+ 全量，Phase 1 微量防退化) ──────
+        # Phase 1: 仅防 stim head 权重退化（λ=0.001，约 1/150 全量），不影响 BIS 收敛
+        # Phase 2: 线性热身 ep31→ep35，阶跃保护 BIS 头
+        # Phase 3: 全量 λ_stim=0.15
         stim_ramp = 1.0
-        if cur_phase == 2 and self.stim_warmup_epochs > 0:
-            epochs_into_ph2 = epoch - self.phase2_start_epoch   # 0 at first Phase2 epoch
+        if cur_phase == 1:
+            effective_lambda_stim = self.lambda_stim * 0.007   # ~0.001, anti-decay only
+        elif cur_phase == 2 and self.stim_warmup_epochs > 0:
+            epochs_into_ph2 = epoch - self.phase2_start_epoch
             stim_ramp = min(1.0, epochs_into_ph2 / self.stim_warmup_epochs)
-        effective_lambda_stim = self.lambda_stim * stim_ramp
+            effective_lambda_stim = self.lambda_stim * stim_ramp
+        else:
+            effective_lambda_stim = self.lambda_stim
 
         stim_err = focal_loss(
             stim_logits.view(-1),
@@ -264,18 +276,17 @@ class MultiTaskLossV3(nn.Module):
             gamma=self.focal_gamma,
             alpha=self.focal_alpha,
             pos_weight=self.stim_pos_weight,
-        ) if cur_phase >= 2 else pred_bis.new_zeros(1).squeeze()
+        )
 
         # ── Phase 1/2 总损失 ──────────────────────────────────────────────────
         if cur_phase < 3:
-            main_losses = [bis_err, phase_err] if cur_phase == 1 else [bis_err, phase_err, stim_err]
+            main_losses = [bis_err, phase_err, stim_err]
             if self.use_auto_weight:
                 total = self._auto_weighted_sum(main_losses)
             else:
-                lambdas = [self.lambda_bis, self.lambda_phase]
-                if cur_phase >= 2:
-                    lambdas.append(effective_lambda_stim)  # 使用热身后的权重
-                total = sum(l * e for l, e in zip(lambdas, main_losses))
+                total = (self.lambda_bis   * bis_err +
+                         self.lambda_phase * phase_err +
+                         effective_lambda_stim * stim_err)
 
             return {
                 "loss":          total,

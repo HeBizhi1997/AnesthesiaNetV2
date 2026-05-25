@@ -185,6 +185,32 @@ def multiscale_entropy(x: np.ndarray, fs: float,
 #   - Present in awake cognition; disrupted by anesthesia
 # ═══════════════════════════════════════════════════════════════════════════════
 
+def _build_pac_filters(fs: float, phase_band=(0.5, 4.0), amp_band=(8.0, 13.0)):
+    """Pre-compute SOS filter coefficients for PAC (called once, not per window)."""
+    nyq = fs / 2.0
+    sos_phase = butter(4, [phase_band[0] / nyq, phase_band[1] / nyq],
+                       btype="bandpass", output="sos")
+    sos_amp = butter(4, [amp_band[0] / nyq, amp_band[1] / nyq],
+                     btype="bandpass", output="sos")
+    return sos_phase, sos_amp
+
+
+def pac_modulation_index_fast(x: np.ndarray, sos_phase, sos_amp) -> float:
+    """PAC Modulation Index with pre-computed SOS filters (fast path)."""
+    n = len(x)
+    if n < 4:
+        return 0.0
+    try:
+        phase_signal = sosfiltfilt(sos_phase, x)
+        phi = np.angle(hilbert(phase_signal))
+        amp_signal = sosfiltfilt(sos_amp, x)
+        env = np.abs(hilbert(amp_signal))
+        z = np.mean(env * np.exp(1j * phi))
+        return float(np.abs(z) / (np.mean(env) + 1e-12))
+    except Exception:
+        return 0.0
+
+
 def pac_modulation_index(x: np.ndarray, fs: float,
                          phase_band: tuple = (0.5, 4.0),    # delta phase
                          amp_band: tuple = (8.0, 13.0),     # alpha amplitude
@@ -192,27 +218,14 @@ def pac_modulation_index(x: np.ndarray, fs: float,
     """
     Phase-Amplitude Coupling Modulation Index (Tort et al.).
     Returns value in [0, 1]; higher = stronger coupling.
+    Convenience wrapper — use pac_modulation_index_fast for batch processing.
     """
     n = len(x)
     if n < int(fs * 0.5):
         return 0.0
     try:
-        nyq = fs / 2.0
-        # Phase band filter
-        sos_phase = butter(4, [phase_band[0] / nyq, phase_band[1] / nyq],
-                          btype="bandpass", output="sos")
-        phase_signal = sosfiltfilt(sos_phase, x)
-        phi = np.angle(hilbert(phase_signal))
-
-        # Amplitude band filter
-        sos_amp = butter(4, [amp_band[0] / nyq, amp_band[1] / nyq],
-                        btype="bandpass", output="sos")
-        amp_signal = sosfiltfilt(sos_amp, x)
-        env = np.abs(hilbert(amp_signal))
-
-        # Modulation Index
-        z = np.mean(env * np.exp(1j * phi))
-        return float(np.abs(z) / (np.mean(env) + 1e-12))
+        sos_phase, sos_amp = _build_pac_filters(fs, phase_band, amp_band)
+        return pac_modulation_index_fast(x, sos_phase, sos_amp)
     except Exception:
         return 0.0
 

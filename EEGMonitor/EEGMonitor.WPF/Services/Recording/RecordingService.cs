@@ -6,14 +6,16 @@ using System.IO;
 namespace EEGMonitor.Services.Recording;
 
 /// <summary>
-/// Persists raw EEG samples (binary float32), processed results (JSONL), and events (JSON).
+/// Persists EEG data in two separate files:
+///   raw_eeg.bin       – raw EEG signal samples only (binary float32 per sample)
+///   processed.jsonl   – preprocessed EEG + model inference results (JSONL, one per epoch)
+///
 /// Session directory layout:
 ///   Sessions/{SessionId}/
 ///     session.json          – metadata
-///     raw_eeg.bin           – packed float32 samples (timestamp:int64, ch0..chN:float32)
-///     vitals.bin            – packed float32 (timestamp:int64, spo2, hr, pulse)
-///     processed.jsonl       – one JSON per processed epoch
-///     events.json           – list of ClinicalEvent
+///     raw_eeg.bin           – raw EEG: (timestamp:int64, ch0..chN:float32) per sample
+///     vitals.bin            – vitals: (timestamp:int64, spo2, hr, pulse) per sample
+///     processed.jsonl       – preprocessed EEG + inference results (band waves, powers, BIS, entropy, fNox, DSA, spindle, vitals)
 /// </summary>
 public sealed class RecordingService : IRecordingService
 {
@@ -37,7 +39,7 @@ public sealed class RecordingService : IRecordingService
         Directory.CreateDirectory(_baseDir);
     }
 
-    public RecordingSession StartSession(string patientId, string surgeryType, string @operator = "")
+    public RecordingSession StartSession(string patientId, string surgeryType, string @operator = "", int sampleRate = 256)
     {
         if (IsRecording) StopSessionAsync().GetAwaiter().GetResult();
 
@@ -47,6 +49,7 @@ public sealed class RecordingService : IRecordingService
             SurgeryType = surgeryType,
             Operator = @operator,
             StartTime = DateTime.Now,
+            SampleRate = sampleRate,
         };
 
         var dir = Path.Combine(_baseDir, session.SessionId.ToString());
@@ -90,11 +93,10 @@ public sealed class RecordingService : IRecordingService
         var vitW = _vitalsWriter;
         if (rawW == null) return Task.CompletedTask;
 
-        // Persist actual channel count from the first sample (avoids stale default of 4)
+        // Persist actual channel count from the first sample (avoids stale default of 2)
         if (!_channelCountSet && CurrentSession != null && sample.Channels.Length > 0)
         {
             CurrentSession.ChannelCount  = sample.Channels.Length;
-            CurrentSession.SampleRate    = 256;
             _channelCountSet = true;
             SaveSessionMetadata();
         }

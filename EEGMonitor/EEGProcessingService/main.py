@@ -36,8 +36,8 @@ from api.simulate_router import router as simulate_router
 
 app = FastAPI(
     title="EEG Processing Service",
-    description="AnesthesiaNetV2 real-time EEG processing and BIS prediction",
-    version="2.0.0",
+    description="AnesthesiaNetV3 (MERIDIAN v13) real-time EEG processing and BIS prediction",
+    version="3.0.0",
 )
 
 app.add_middleware(
@@ -53,12 +53,12 @@ app.include_router(simulate_router)
 
 @app.on_event("startup")
 async def startup():
-    # Preferred checkpoint: latest v11 model in the tianjin outputs folder
+    # Preferred checkpoint: latest v13 model in the tianjin outputs folder
     root = Path(__file__).resolve().parents[2]   # tianjin/
     candidates = [
+        root / "outputs" / "checkpoints" / "v13" / "best_model_v3.pt",
         root / "outputs" / "checkpoints" / "v11" / "best_model_v3.pt",
         root / "outputs" / "checkpoints" / "best_model.pt",
-        root / "checkpoints" / "best_model.pth",
     ]
     model_path = next((p for p in candidates if p.exists()), None)
     init_services(model_path=str(model_path) if model_path else None)

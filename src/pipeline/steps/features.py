@@ -112,23 +112,18 @@ def _multi_bsr(x: np.ndarray,
 def _pac_modulation_index(
     x: np.ndarray,
     fs: float,
-    lo_band: tuple = (8.0, 13.0),   # alpha phase
-    hi_band: tuple = (30.0, 47.0),  # gamma amplitude
+    lo_band: tuple = (0.5, 4.0),    # delta phase (propofol GABA_A target)
+    hi_band: tuple = (8.0, 13.0),    # alpha amplitude
 ) -> float:
     """
-    Phase-Amplitude Coupling (PAC) Modulation Index (Tort et al., 2010).
+    δ-α Phase-Amplitude Coupling Modulation Index (Tort et al., 2010).
 
-    Measures the strength of coupling between the PHASE of low-frequency
-    oscillations (alpha 8-13 Hz) and the AMPLITUDE of high-frequency
-    oscillations (gamma 30-47 Hz).
+    Delta (0.5-4Hz) phase modulates alpha (8-13Hz) amplitude under propofol
+    via GABA_A agonism (Purdon et al., 2013, PNAS).
+    This is the most specific single-feature discriminator of propofol
+    anesthesia vs. natural sleep (ABSENT in sleep).
 
-    Clinical significance:
-      - Healthy/awake: strong alpha-gamma PAC in prefrontal cortex
-      - Propofol induction: PAC collapses rapidly at LOC (loss of consciousness)
-      - Maintenance: near-zero PAC; distinguishes maintenance from induction
-      - Recovery: gradual PAC restoration correlates with returning awareness
-
-    Formula: MI = |mean(A_gamma * exp(i * phi_alpha))| / mean(A_gamma)
+    Formula: MI = |mean(A_alpha * exp(i * phi_delta))| / mean(A_alpha)
     Range  : [0, 1]  — 0 = no coupling, higher = stronger phase-gating
 
     Returns 0.0 on short windows or filter failures (safe fallback).
@@ -258,8 +253,8 @@ class FeatureExtractor(EEGStep):
         # v10 EMG 分离算法特征（与 BatchProcessor 共用同一计算逻辑）
         self.compute_slope       = cfg.get("spectral_slope", False)
         self.compute_gamma_ratio = cfg.get("gamma_emg_ratio", False)
-        # PAC: alpha-gamma 相位-幅度耦合（丙泊酚敏感，默认关闭）
-        # 注意：PAC 不在 BatchProcessor 中实现，开启后需同步更新 BatchProcessor
+        # PAC: δ-α 相位-幅度耦合 (Purdon 2013, PNAS)
+        # 丙泊酚 GABA_A 激动的最特异电生理标志物
         self.compute_pac = cfg.get("pac", False)
         # v12 advanced features
         self.compute_sigma        = cfg.get("sigma_power", False)
@@ -324,10 +319,6 @@ class FeatureExtractor(EEGStep):
         if self.compute_gamma_ratio:
             feats.append(_gamma_emg_ratio(pxx, freqs))
 
-        # PAC: alpha-gamma modulation index (disabled by default)
-        if self.compute_pac:
-            feats.append(_pac_modulation_index(x, self.fs))
-
         # v12: advanced features
         if self.compute_sigma:
             feats.append(_sigma_power_ratio(pxx, freqs))
@@ -348,6 +339,9 @@ class FeatureExtractor(EEGStep):
 
         if self.compute_hjorth_comp:
             feats.append(hjorth_complexity(x))
+
+        if self.compute_pac:
+            feats.append(_pac_modulation_index(x, self.fs))
 
         return np.array(feats, dtype=np.float32)
 
@@ -390,14 +384,13 @@ class FeatureExtractor(EEGStep):
             n += 1
         if self.compute_gamma_ratio:
             n += 1
-        if self.compute_pac:
-            n += 1
         # v12 advanced features
         if self.compute_sigma:       n += 1
         if self.compute_slow:        n += 1
         if self.compute_zcr:         n += 1
         if self.compute_hjorth_mob:  n += 1
         if self.compute_hjorth_comp: n += 1
+        if self.compute_pac:         n += 1  # δ-α PAC
         return n
 
     @property
@@ -434,6 +427,8 @@ class FeatureExtractor(EEGStep):
         if name == "hjorth_mobility":    return offset - 1
         if self.compute_hjorth_comp: offset += 1
         if name == "hjorth_complexity":  return offset - 1
+        if self.compute_pac:         offset += 1
+        if name == "delta_alpha_pac":    return offset - 1
         raise ValueError(f"Unknown feature name: {name}")
 
     _VALIDATE_FLAGS = {

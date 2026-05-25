@@ -8,9 +8,9 @@ public partial class SettingsDialog : Window
     {
         InitializeComponent();
         SampleRateCombo.ItemsSource = new[] { 128, 250, 256, 500, 512, 1000, 1024 };
-        SampleRateCombo.SelectedItem = 256;
+        SampleRateCombo.SelectedItem = 128;
         ChannelCombo.ItemsSource = Enumerable.Range(1, 16).ToList();
-        ChannelCombo.SelectedItem = 4;
+        ChannelCombo.SelectedItem = 2;
     }
 
     private void SaveClick(object sender, RoutedEventArgs e)

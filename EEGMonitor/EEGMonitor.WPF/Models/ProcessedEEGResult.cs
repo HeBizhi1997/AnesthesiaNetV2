@@ -4,7 +4,7 @@ namespace EEGMonitor.Models;
 
 public class ProcessedEEGResult
 {
-    [JsonIgnore]
+    [JsonProperty("timestamp")]
     public DateTime Timestamp { get; set; }
 
     // ── Depth of Anesthesia ──
@@ -18,7 +18,8 @@ public class ProcessedEEGResult
     [JsonProperty("fnox_mr_mode")] public bool? FNoxMRMode { get; set; }
 
     // ── EEG Component Waves ──
-    [JsonProperty("raw_eeg")]    public double[] RawEEG { get; set; } = Array.Empty<double>();
+    [JsonIgnore]                 public double[] RawEEG { get; set; } = Array.Empty<double>();  // persisted to raw_eeg.bin only
+    [JsonProperty("filtered_eeg")] public double[] FilteredEEG { get; set; } = Array.Empty<double>();
     [JsonProperty("delta_wave")] public double[] DeltaWave { get; set; } = Array.Empty<double>();
     [JsonProperty("theta_wave")] public double[] ThetaWave { get; set; } = Array.Empty<double>();
     [JsonProperty("alpha_wave")] public double[] AlphaWave { get; set; } = Array.Empty<double>();
@@ -52,4 +53,12 @@ public class ProcessedEEGResult
     [JsonProperty("eeg_amplitude_uv")] public double EegAmplitudeUv { get; set; }
     [JsonProperty("eeg_dominant_hz")]  public double EegDominantHz  { get; set; }
     [JsonProperty("eeg_tonal_ratio")]  public double EegTonalRatio  { get; set; }
+
+    // ── Hardware diagnostics (NSM device) ──
+    [JsonProperty("hw_clipping_pct")]      public double HwClippingPct { get; set; }
+    [JsonProperty("hw_dc_offset_uv")]      public double HwDcOffsetUv { get; set; }
+    [JsonProperty("hw_is_saturated")]      public bool   HwIsSaturated { get; set; }
+    [JsonProperty("hw_adc_range_uv")]      public double HwAdcRangeUv { get; set; }
+    [JsonProperty("device_delta_ratio")]   public double? DeviceDeltaRatio { get; set; }
+    [JsonProperty("device_delta_discrepancy")] public double? DeviceDeltaDiscrepancy { get; set; }
 }

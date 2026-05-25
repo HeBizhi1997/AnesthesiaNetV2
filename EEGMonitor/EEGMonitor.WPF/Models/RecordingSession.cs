@@ -8,8 +8,8 @@ public class RecordingSession
     public string Operator { get; set; } = string.Empty;
     public DateTime StartTime { get; set; }
     public DateTime? EndTime { get; set; }
-    public int SampleRate { get; set; } = 256;
-    public int ChannelCount { get; set; } = 4;
+    public int SampleRate { get; set; } = 128;
+    public int ChannelCount { get; set; } = 2;
     public string RecordingDirectory { get; set; } = string.Empty;
     public List<ClinicalEvent> Events { get; set; } = new();
     public bool IsPlayback { get; set; }

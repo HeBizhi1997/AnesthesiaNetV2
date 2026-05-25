@@ -31,6 +31,22 @@ public sealed class DataPipeline : IAsyncDisposable
     /// </summary>
     public int DeviceSampleRate { get; set; } = 256;
 
+    /// <summary>
+    /// Latest NSM device-reported band powers (dB). Set by MainViewModel on each
+    /// NSMDataReceived event. Attached to chunks for cross-validation in the Python service.
+    /// Thread-safe: written by UI thread, read by ChunkingStage.
+    /// </summary>
+    private Dictionary<string, int>? _latestDeviceBandPowersDb;
+    private readonly object _deviceBandLock = new();
+    public void SetDeviceBandPowers(Dictionary<string, int>? db)
+    {
+        lock (_deviceBandLock) { _latestDeviceBandPowersDb = db; }
+    }
+    private Dictionary<string, int>? GetDeviceBandPowers()
+    {
+        lock (_deviceBandLock) { return _latestDeviceBandPowersDb; }
+    }
+
     private readonly Channel<EEGSample> _rawChannel;
     private readonly Channel<EEGDataChunk> _chunkChannel;
     private readonly Channel<ProcessedEEGResult> _resultChannel;
@@ -182,6 +198,7 @@ public sealed class DataPipeline : IAsyncDisposable
                         Samples = buffer.ToList(),
                         SampleRate = DeviceSampleRate,
                         ChannelCount = buffer[0].Channels.Length,
+                        DeviceBandPowersDb = GetDeviceBandPowers(),
                     }, _cts.Token);
                     buffer.Clear();
                 }

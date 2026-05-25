@@ -40,11 +40,26 @@ public sealed class NSMSerialService : ISerialPortService
     private long _packetsDecoded;
     private int _sampleRate;
 
+    // Auto-detection: the NSM device outputs at a fixed internal rate (~100 Hz).
+    // We measure inter-packet arrival times to infer the true rate, independent
+    // of what the user selected in the UI dropdown.
+    private DateTime _lastPacketTime = DateTime.MinValue;
+    private readonly List<double> _packetIntervalsMs = new(10);
+    private int _detectedSampleRate;
+    private bool _rateLocked;
+
     public bool IsConnected => _port?.IsOpen ?? false;
     public string PortName => _port?.PortName ?? string.Empty;
     public int BaudRate => _port?.BaudRate ?? 0;
     public long TotalBytesIn => _totalBytesIn;
     public long PacketsDecoded => _packetsDecoded;
+
+    /// <summary>
+    /// Auto-detected sample rate from packet arrival timing.
+    /// Falls back to the configured rate until enough packets have arrived.
+    /// </summary>
+    public int DetectedSampleRate =>
+        _rateLocked ? _detectedSampleRate : _sampleRate;
 
     public event Action<EEGSample>? SampleReceived;
     public event Action<NSMDataPacket>? NSMDataReceived;
@@ -67,6 +82,10 @@ public sealed class NSMSerialService : ISerialPortService
         _totalBytesIn = 0;
         _packetsDecoded = 0;
         _sampleRate = sampleRate;
+        _lastPacketTime = DateTime.MinValue;
+        _packetIntervalsMs.Clear();
+        _detectedSampleRate = sampleRate;
+        _rateLocked = false;
 
         try
         {
@@ -188,6 +207,42 @@ public sealed class NSMSerialService : ISerialPortService
 
             _buffer.RemoveRange(0, PACKET_SIZE);
             _packetsDecoded++;
+
+            // ── Auto-detect actual sample rate from packet timing ──────────
+            var now = DateTime.UtcNow;
+            if (_lastPacketTime != DateTime.MinValue)
+            {
+                double intervalMs = (now - _lastPacketTime).TotalMilliseconds;
+                if (intervalMs > 100 && intervalMs < 5000)  // sane range
+                {
+                    _packetIntervalsMs.Add(intervalMs);
+                    if (_packetIntervalsMs.Count > 10)
+                        _packetIntervalsMs.RemoveAt(0);
+
+                    if (_packetIntervalsMs.Count >= 5 && !_rateLocked)
+                    {
+                        double avgIntervalMs = _packetIntervalsMs.Average();
+                        // 100 samples per packet → sample rate = 100 / interval_s
+                        _detectedSampleRate = (int)Math.Round(100000.0 / avgIntervalMs);
+                        _detectedSampleRate = Math.Clamp(_detectedSampleRate, 50, 500);
+                        _rateLocked = true;
+
+                        if (Math.Abs(_detectedSampleRate - _sampleRate) > 10)
+                        {
+                            _logger.LogWarning(
+                                "NSM rate mismatch: configured={0} Hz, detected={1} Hz. Using detected rate.",
+                                _sampleRate, _detectedSampleRate);
+                        }
+                        else
+                        {
+                            _logger.LogInformation(
+                                "NSM rate confirmed: {0} Hz (configured: {1} Hz)",
+                                _detectedSampleRate, _sampleRate);
+                        }
+                    }
+                }
+            }
+            _lastPacketTime = now;
 
             if (_packetsDecoded == 1 || (_packetsDecoded % 16) == 0)
             {

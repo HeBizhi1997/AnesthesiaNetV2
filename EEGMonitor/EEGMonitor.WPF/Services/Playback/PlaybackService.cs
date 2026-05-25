@@ -42,6 +42,9 @@ public sealed class PlaybackService : IPlaybackService
             .OrderBy(r => r.Timestamp)
             .ToList();
 
+        // Populate raw EEG from raw_eeg.bin (separated from processed.jsonl during recording)
+        await LoadRawEEGAsync(sessionDirectory);
+
         _events = Session.Events.OrderBy(e => e.Timestamp).ToList();
 
         TotalDuration = _results.Count > 0
@@ -49,6 +52,48 @@ public sealed class PlaybackService : IPlaybackService
             : TimeSpan.Zero;
 
         _logger.LogInformation("Session loaded: {Count} epochs, Duration={Duration}", _results.Count, TotalDuration);
+    }
+
+    private async Task LoadRawEEGAsync(string sessionDirectory)
+    {
+        var rawPath = Path.Combine(sessionDirectory, "raw_eeg.bin");
+        if (!File.Exists(rawPath) || _results.Count == 0) return;
+
+        var channelCount = Session?.ChannelCount ?? 1;
+        var sampleRate = Session?.SampleRate ?? 256;
+
+        var bytes = await File.ReadAllBytesAsync(rawPath);
+        var recordSize = sizeof(long) + channelCount * sizeof(float);
+        var totalRecords = bytes.Length / recordSize;
+
+        // Parse all raw samples: (timestamp, ch0_value)
+        var rawSamples = new List<(DateTime ts, double val)>(totalRecords);
+        for (int i = 0; i < totalRecords; i++)
+        {
+            var offset = i * recordSize;
+            var tick = BitConverter.ToInt64(bytes, offset);
+            var ts = DateTime.FromBinary(tick);
+            var val = (double)BitConverter.ToSingle(bytes, offset + sizeof(long));
+            rawSamples.Add((ts, val));
+        }
+
+        // Assign raw samples to epochs by time window [epoch.Timestamp, epoch.Timestamp + 1s)
+        var samplesPerEpoch = sampleRate;
+        int sampleIdx = 0;
+        foreach (var r in _results)
+        {
+            var epochEnd = r.Timestamp.AddSeconds(1.0);
+            var list = new List<double>(samplesPerEpoch);
+            while (sampleIdx < rawSamples.Count && rawSamples[sampleIdx].ts < r.Timestamp)
+                sampleIdx++;
+            while (sampleIdx < rawSamples.Count && rawSamples[sampleIdx].ts < epochEnd && list.Count < samplesPerEpoch)
+            {
+                list.Add(rawSamples[sampleIdx].val);
+                sampleIdx++;
+            }
+            if (list.Count > 0)
+                r.RawEEG = list.ToArray();
+        }
     }
 
     public async Task PlayAsync(TimeSpan? startFrom = null)

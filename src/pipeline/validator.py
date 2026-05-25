@@ -273,6 +273,7 @@ class PipelineValidator:
         n_zcr   = 1 if fcfg.get("zero_crossing_rate", False) else 0
         n_hmob  = 1 if fcfg.get("hjorth_mobility", False) else 0
         n_hcomp = 1 if fcfg.get("hjorth_complexity", False) else 0
+        n_pac   = 1 if fcfg.get("pac", False) else 0  # δ-α PAC
         self.feats_per_ch = 5 + 1 + 1 + 1 + n_bsr + n_slope + n_gemg + n_sigma + n_slow + n_zcr + n_hmob + n_hcomp + n_pac
 
         n_ch = len(cfg["eeg"]["channels"])

@@ -289,9 +289,34 @@ public partial class MainViewModel : BaseViewModel
             if (ok)
             {
                 IsConnected = true;
-                _pipeline.DeviceSampleRate = NsmSampleRate;
+                // Use auto-detected rate from packet timing (NSM always ~100 Hz).
+                // Falls back to configured rate until detection locks in after ~5 packets.
+                _pipeline.DeviceSampleRate = _nsmSerial.DetectedSampleRate;
                 _pipeline.Start();
-                StatusMessage = $"NSM Connected: {SelectedPort}";
+                StatusMessage = $"NSM Connected: {SelectedPort} @ {_nsmSerial.DetectedSampleRate}Hz";
+
+                // Sync detected rate once auto-detection locks (within ~5s).
+                // The pipeline reads DeviceSampleRate at chunk creation, so updating
+                // it after detection fixes any configuration mismatch mid-session.
+                _ = Task.Run(async () =>
+                {
+                    for (int i = 0; i < 15; i++)  // wait up to ~15s for rate lock
+                    {
+                        await Task.Delay(1000);
+                        var detected = _nsmSerial.DetectedSampleRate;
+                        if (detected != _pipeline.DeviceSampleRate)
+                        {
+                            var old = _pipeline.DeviceSampleRate;
+                            _pipeline.DeviceSampleRate = detected;
+                            RunOnUI(() =>
+                            {
+                                StatusMessage = $"NSM rate corrected: {old}Hz -> {detected}Hz (auto-detected)";
+                            });
+                            _logger.LogWarning("NSM rate corrected: {Old}Hz -> {New}Hz", old, detected);
+                            break;
+                        }
+                    }
+                });
             }
             else
             {
@@ -361,7 +386,7 @@ public partial class MainViewModel : BaseViewModel
         // Reset Python stateful processors so BIS/SE/fNox start fresh for this patient
         _ = _processing.ResetSessionAsync();
 
-        var session = _recording.StartSession(PatientId, SurgeryType);
+        var session = _recording.StartSession(PatientId, SurgeryType, sampleRate: _pipeline.DeviceSampleRate);
         _sessionStart = session.StartTime;
         _sessionElapsedSec = 0;
         IsRecording = true;
@@ -492,16 +517,41 @@ public partial class MainViewModel : BaseViewModel
             };
 
             // Signal quality diagnostics
-            if (result.EegAmplitudeUv > 0)
             {
                 var warnings = new System.Text.StringBuilder();
-                if (result.EegAmplitudeUv < 5.0)
+                if (result.EegAmplitudeUv > 0 && result.EegAmplitudeUv < 5.0)
                     warnings.Append($"⚠ 信号幅度过低 {result.EegAmplitudeUv:F1}µV (应≥15µV) · 检查电极接触");
                 if (result.EegTonalRatio > 0.40)
                 {
                     if (warnings.Length > 0) warnings.Append("  |  ");
                     warnings.Append($"⚠ {result.EegDominantHz:F1}Hz 干扰 (占{result.EegTonalRatio*100:F0}%功率) · 非脑电信号");
                 }
+
+                // Hardware diagnostics (NSM device)
+                if (result.HwIsSaturated)
+                {
+                    if (warnings.Length > 0) warnings.Append("  |  ");
+                    warnings.Append($"⚠ ADC饱和 ({result.HwClippingPct:F0}%削顶 @ ±{result.HwAdcRangeUv:F0}µV) · 信号幅度超出硬件量程，频谱失真");
+                }
+                else if (result.HwClippingPct > 5.0)
+                {
+                    if (warnings.Length > 0) warnings.Append("  |  ");
+                    warnings.Append($"⚠ 信号近饱和 ({result.HwClippingPct:F0}%近轨) · 可能有削顶失真");
+                }
+
+                if (Math.Abs(result.HwDcOffsetUv) > 50.0)
+                {
+                    if (warnings.Length > 0) warnings.Append("  |  ");
+                    warnings.Append($"⚠ DC偏置 {result.HwDcOffsetUv:F0}µV · 检查电极/ADC校准");
+                }
+
+                // Device/pipeline cross-validation
+                if (result.DeviceDeltaDiscrepancy > 0.30)
+                {
+                    if (warnings.Length > 0) warnings.Append("  |  ");
+                    warnings.Append($"⚠ 设备/管线δ偏差 ({result.DeviceDeltaDiscrepancy*100:F0}%) · 管线δ={result.DeltaPower*100:F0}% 设备δ={result.DeviceDeltaRatio*100:F0}%");
+                }
+
                 SignalWarning = warnings.ToString();
                 HasSignalWarning = warnings.Length > 0;
             }
@@ -662,6 +712,19 @@ public partial class MainViewModel : BaseViewModel
             NsmAlphaPower = pkt.AlphaPowerDb;
             NsmBetaPower  = pkt.BetaPowerDb;
             NsmGammaPower = pkt.GammaPowerDb;
+
+            // Feed device band powers to the pipeline for cross-validation
+            if (IsRecording || IsConnected)
+            {
+                _pipeline.SetDeviceBandPowers(new Dictionary<string, int>
+                {
+                    ["delta"] = pkt.DeltaPowerDb,
+                    ["theta"] = pkt.ThetaPowerDb,
+                    ["alpha"] = pkt.AlphaPowerDb,
+                    ["beta"]  = pkt.BetaPowerDb,
+                    ["gamma"] = pkt.GammaPowerDb,
+                });
+            }
 
             // ── NSM connection status ──────────────────────────────────────
             var sb = new System.Text.StringBuilder();

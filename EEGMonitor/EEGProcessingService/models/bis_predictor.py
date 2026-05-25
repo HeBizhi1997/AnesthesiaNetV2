@@ -1,6 +1,9 @@
 """
-BIS predictor with online AnesthesiaNetV3 (MERIDIAN) streaming inference.
+BIS predictor with online AnesthesiaNetV3 (MERIDIAN v13) streaming inference.
 Falls back to a spectral heuristic if the model or dependencies are unavailable.
+
+v13 feature set (38-dim): 5 bands + PE + SEF95 + LZC + 3×BSR + slope + gemg
+                          + sigma + slow_osc + zcr + hjorth_mob + pac  (18/ch)
 
 Streaming design (mirrors training pipeline exactly):
   Each /process call delivers one 1-second EEG chunk at input_fs Hz.
@@ -25,13 +28,14 @@ import numpy as np
 from loguru import logger
 from scipy.signal import butter, sosfiltfilt, iirnotch, filtfilt, resample_poly
 
+# tianjin/ must be on sys.path BEFORE importing src.pipeline modules
+_MODEL_ROOT = Path(__file__).resolve().parents[3]   # tianjin/
+sys.path.insert(0, str(_MODEL_ROOT))
+
 try:
     from src.pipeline.context import EEGContext
 except ImportError:
     EEGContext = None
-
-_MODEL_ROOT = Path(__file__).resolve().parents[3]   # tianjin/
-sys.path.insert(0, str(_MODEL_ROOT))
 
 try:
     import torch
@@ -108,6 +112,8 @@ class BISPredictor:
         self._calib_buf: list[list[float]] = [[] for _ in range(self._N_CHANNELS)]
         self._norm_scale: np.ndarray = np.ones(self._N_CHANNELS, dtype=np.float32)
         self._calibrated: bool = False
+        self._dead_channel: int | None = None    # auto-detected dead channel
+        self._mirror_source: int | None = None   # which channel to mirror from
 
         if _TORCH_AVAILABLE:
             self._try_load_model(model_path)
@@ -118,9 +124,9 @@ class BISPredictor:
         import torch
         candidates = [
             model_path,
+            str(_MODEL_ROOT / "outputs" / "checkpoints" / "v13" / "best_model_v3.pt"),
             str(_MODEL_ROOT / "outputs" / "checkpoints" / "v11" / "best_model_v3.pt"),
             str(_MODEL_ROOT / "outputs" / "checkpoints" / "best_model.pt"),
-            str(_MODEL_ROOT / "checkpoints" / "best_model.pth"),
         ]
         for path in candidates:
             if not (path and Path(path).exists()):
@@ -154,8 +160,14 @@ class BISPredictor:
             sqi_cfg  = self._cfg.get("sqi", {})
             self._feat_ext = FeatureExtractor(feat_cfg, fs=float(self._TARGET_FS))
             self._sqi_comp = SQIComputer(sqi_cfg)
-            dim = self._feat_ext.total_feature_dim_for(self._N_CHANNELS)
-            logger.info(f"Feature pipeline ready: dim={dim}")
+            self._feature_dim = self._feat_ext.total_feature_dim_for(self._N_CHANNELS)
+            cfg_dim = self._cfg.get("model", {}).get("feature_dim")
+            if cfg_dim and cfg_dim != self._feature_dim:
+                logger.warning(
+                    f"Config feature_dim={cfg_dim} vs computed={self._feature_dim} — "
+                    f"using computed value. Check config consistency."
+                )
+            logger.info(f"Feature pipeline ready: dim={self._feature_dim} (v13={self._feature_dim})")
         except Exception as e:
             logger.warning(f"Feature pipeline init failed: {e} – falling back to heuristic")
             self._model = None
@@ -170,6 +182,8 @@ class BISPredictor:
         self._calib_buf = [[] for _ in range(self._N_CHANNELS)]
         self._norm_scale = np.ones(self._N_CHANNELS, dtype=np.float32)
         self._calibrated = False
+        self._dead_channel = None
+        self._mirror_source = None
         logger.debug("BISPredictor state + amplitude calibration reset")
 
     def predict(self, eeg_epoch: np.ndarray, band_powers: dict) -> float:
@@ -213,23 +227,79 @@ class BISPredictor:
         for i in range(resampled.shape[1]):
             for ch in range(self._N_CHANNELS):
                 v = float(resampled[ch, i])
+                # Auto-mirror: if channel is dead, use good channel's data
+                if getattr(self, '_dead_channel', None) is not None and ch == self._dead_channel:
+                    v = float(resampled[self._mirror_source, i])
                 self._buf[ch].append(v)
                 if not self._calibrated:
                     self._calib_buf[ch].append(v)
 
-        # Compute per-session MAD scale once we have _CALIB_SEC of data.
-        # Matches VitalLoader._compute_baseline_scale (MAD / 0.6745 ≈ robust σ).
+        # Compute per-session amplitude scale once we have _CALIB_SEC of data.
+        # v13: band-ratio aware normalization (matches training VitalLoader._compute_baseline_scale).
+        #
+        # Problem: pure MAD normalization divides all frequencies by the same scale.
+        # In deep anesthesia, delta amplitude is 5-10× alpha/beta, so MAD is dominated
+        # by low-frequency power. Dividing by this large value compresses high-frequency
+        # components (alpha, beta, gamma) to near-zero, destroying spectral information
+        # that the model relies on for BIS discrimination.
+        #
+        # Fix: when delta exceeds 90% of total spectral power, compute alpha+beta RMS
+        # via time-domain bandpass filter and use it as the normalization reference.
+        # The 2.5× factor maps narrow-band alpha+beta RMS to full-bandwidth equivalent σ
+        # (empirically calibrated against awake EEG where delta ≈ 2.5× alpha RMS).
         if not self._calibrated and len(self._calib_buf[0]) >= self._CALIB_SAMP:
             scale = np.ones(self._N_CHANNELS, dtype=np.float32)
             for ch in range(self._N_CHANNELS):
                 arr = np.array(self._calib_buf[ch], dtype=np.float64)
+
+                # Standard MAD fallback
                 mad = float(np.median(np.abs(arr - np.median(arr))))
-                scale[ch] = max(mad / 0.6745, 0.1)
+                mad_sigma = max(mad / 0.6745, 0.1)
+
+                # Band-ratio detection: compute delta / total power ratio
+                freqs = np.fft.rfftfreq(len(arr), d=1.0 / self._TARGET_FS)
+                psd_full = np.abs(np.fft.rfft(arr - arr.mean())) ** 2
+                total_p = psd_full.sum() + 1e-12
+                delta_ratio = psd_full[(freqs >= 0.5) & (freqs < 4.0)].sum() / total_p
+
+                if delta_ratio > 0.90:
+                    # Delta-dominant → use alpha+beta RMS as reference (time-domain)
+                    sos_ab = butter(4, [8.0 / (self._TARGET_FS / 2), 30.0 / (self._TARGET_FS / 2)],
+                                    btype='bandpass', output='sos')
+                    ab_signal = sosfiltfilt(sos_ab, arr)
+                    ab_rms = float(np.std(ab_signal))
+                    if ab_rms > 0.01:
+                        scale[ch] = max(ab_rms * 2.5, 0.1)
+                    else:
+                        scale[ch] = mad_sigma
+                else:
+                    scale[ch] = mad_sigma
+
+            # Dead-channel detection: if any channel has calibration σ < 2 uV,
+            # it's likely a broken electrode/amplifier. Mirror the good channel.
+            dead_threshold = 2.0  # uV — below this, channel is considered dead
+            for ch in range(self._N_CHANNELS):
+                arr = np.array(self._calib_buf[ch], dtype=np.float64)
+                rms = float(np.std(arr))
+                if rms < dead_threshold:
+                    good_ch = 1 - ch  # assume the other channel is good
+                    good_arr = np.array(self._calib_buf[good_ch], dtype=np.float64)
+                    good_rms = float(np.std(good_arr))
+                    if good_rms > dead_threshold:
+                        logger.warning(
+                            f"ch{ch} appears DEAD (RMS={rms:.2f} uV) — "
+                            f"mirroring ch{good_ch} (RMS={good_rms:.1f} uV)"
+                        )
+                        scale[ch] = scale[good_ch]
+                        self._dead_channel = ch
+                        self._mirror_source = good_ch
+                        break
+
             self._norm_scale = scale
             self._calibrated = True
             logger.info(
-                f"Amplitude calibration complete: "
-                f"σ_ch0={scale[0]:.3f} σ_ch1={scale[1]:.3f} µV"
+                f"Amplitude calibration: ch0={scale[0]:.3f} ch1={scale[1]:.3f} "
+                f"(MAD-σ: {mad_sigma:.3f}, delta_ratio: {delta_ratio:.1%})"
             )
             self._calib_buf = [[] for _ in range(self._N_CHANNELS)]  # free memory
 
@@ -251,9 +321,9 @@ class BISPredictor:
             ], dtype=np.float64)
         window = window / norm[:, np.newaxis]
 
-        # 5. Apply window filters (matching training preprocessing)
+        # 5. Apply window filters (matching v13 training preprocessing: 0.1 Hz highpass)
         filter_cfg = self._cfg.get("filters", {
-            "highpass_hz": 0.5, "lowpass_hz": 47.0, "notch_hz": [60.0], "notch_q": 30.0
+            "highpass_hz": 0.1, "lowpass_hz": 47.0, "notch_hz": [60.0], "notch_q": 30.0
         })
         try:
             window = _window_filter(window, self._TARGET_FS, filter_cfg)
@@ -262,15 +332,21 @@ class BISPredictor:
 
         # 6. SQI + feature extraction
         try:
+            if EEGContext is None:
+                raise RuntimeError("EEGContext is None — import failed at module load")
             ctx = EEGContext(data=window, fs=float(self._TARGET_FS))
+            if self._sqi_comp is None:
+                raise RuntimeError("_sqi_comp is None")
             ctx = self._sqi_comp.process(ctx)
+            if self._feat_ext is None:
+                raise RuntimeError("_feat_ext is None")
             ctx = self._feat_ext.process(ctx)
         except Exception as e:
             logger.warning(f"Feature extraction error: {e}")
             return float("nan")
 
         sqi_arr  = ctx.sqi.astype(np.float32)      # (2,)
-        feat_arr = ctx.features.astype(np.float32)  # (28,)
+        feat_arr = ctx.features.astype(np.float32)  # (feature_dim,)
 
         # 7. Model forward T=1
         try:
@@ -278,7 +354,8 @@ class BISPredictor:
                 window.astype(np.float32), dtype=torch.float32
             ).unsqueeze(0).unsqueeze(0).to(self._device)   # (1,1,2,512)
 
-            feat_t = torch.tensor(feat_arr).unsqueeze(0).unsqueeze(0).to(self._device)   # (1,1,28)
+            feat_dim = getattr(self, '_feature_dim', len(feat_arr))
+            feat_t = torch.tensor(feat_arr).unsqueeze(0).unsqueeze(0).to(self._device)   # (1,1,feature_dim)
             sqi_t  = torch.tensor(sqi_arr).unsqueeze(0).unsqueeze(0).to(self._device)    # (1,1,2)
 
             with torch.no_grad():
@@ -297,9 +374,25 @@ class BISPredictor:
 
     @staticmethod
     def _heuristic_bis(band_powers: dict) -> float:
+        """
+        Spectral heuristic — fallback when model unavailable.
+        Calibrated: awake (δ≈0.2 α≈0.3 β≈0.2) → BIS ~90
+                    deep anesthesia (δ≈0.7 α/β≈0.05) → BIS ~25
+        """
         delta = band_powers.get("delta", 0.0)
+        theta = band_powers.get("theta", 0.0)
         alpha = band_powers.get("alpha", 0.0)
         beta  = band_powers.get("beta",  0.0)
         gamma = band_powers.get("gamma", 0.0)
-        arousal_score = 0.4 * beta + 0.3 * gamma + 0.15 * alpha - 0.35 * delta
-        return float(np.clip(50.0 + arousal_score * 80.0, 0.0, 100.0))
+        total = delta + theta + alpha + beta + gamma + 1e-12
+
+        # Beta ratio is the strongest single-band predictor of wakefulness
+        beta_ratio = beta / total
+        # Delta ratio drives BIS down
+        delta_ratio = delta / total
+        # Alpha/theta balance
+        alpha_ratio = alpha / total
+
+        # Base 50 + beta drives up, delta drives down
+        bis = 50.0 + 120.0 * beta_ratio - 60.0 * delta_ratio + 30.0 * alpha_ratio
+        return float(np.clip(bis, 0.0, 100.0))

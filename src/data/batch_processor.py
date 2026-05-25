@@ -401,6 +401,13 @@ class BatchProcessor:
         self.compute_zcr         = feat_cfg.get("zero_crossing_rate", False)
         self.compute_hjorth_mob  = feat_cfg.get("hjorth_mobility", False)
         self.compute_hjorth_comp = feat_cfg.get("hjorth_complexity", False)
+        self.compute_pac         = feat_cfg.get("pac", False)  # δ-α PAC (Purdon 2013)
+        # Pre-compute PAC filter coefficients (butterworth design is expensive,
+        # done once here instead of per-window in the inner loop)
+        if self.compute_pac:
+            from ..pipeline.steps.advanced_features import _build_pac_filters
+            self._pac_sos_phase, self._pac_sos_amp = _build_pac_filters(
+                self.fs, phase_band=(0.5, 4.0), amp_band=(8.0, 13.0))
 
         self.kurtosis_thresh        = sqi_cfg.get("kurtosis_thresh", 5.0)
         self.high_freq_ratio_thresh = sqi_cfg.get("high_freq_ratio_thresh", 0.4)
@@ -424,6 +431,7 @@ class BatchProcessor:
         if self.compute_zcr:         n += 1
         if self.compute_hjorth_mob:  n += 1
         if self.compute_hjorth_comp: n += 1
+        if self.compute_pac:         n += 1  # δ-α PAC
         return n
 
     def compute(
@@ -555,6 +563,20 @@ class BatchProcessor:
                 mob_x = np.sqrt(var_dx / (np.var(x, axis=1) + 1e-12))
                 comp = (mob_dx / (mob_x + 1e-12)).astype(np.float32)
                 channel_feats[:, ch, col] = comp
+                col += 1
+
+            # v13: δ-α Phase-Amplitude Coupling (Purdon 2013, PNAS)
+            # Delta (0.5-4Hz) phase modulates alpha (8-13Hz) amplitude under
+            # propofol via GABA_A agonism. Absent in natural sleep.
+            # Modulation Index ∈ [0,1]; higher = stronger coupling.
+            # Uses pre-computed SOS filters (butterworth design done once in __init__)
+            if self.compute_pac:
+                from ..pipeline.steps.advanced_features import pac_modulation_index_fast
+                pac_vals = np.zeros(N, dtype=np.float32)
+                sos_p, sos_a = self._pac_sos_phase, self._pac_sos_amp
+                for i in range(N):
+                    pac_vals[i] = pac_modulation_index_fast(x[i], sos_p, sos_a)
+                channel_feats[:, ch, col] = pac_vals
                 col += 1
 
         # ── Inter-channel features ────────────────────────────────────────

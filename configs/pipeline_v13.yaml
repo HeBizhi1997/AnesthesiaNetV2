@@ -89,14 +89,14 @@ features:
   dfa_alpha: false            # v13: disabled — mathematically unreliable on 4s windows
   zero_crossing_rate: true    # time-domain frequency
   hjorth_mobility: true       # mean frequency proxy
-  hjorth_complexity: true     # signal bandwidth
-  pac: false
+  hjorth_complexity: false    # v13: replaced by δ-α PAC (weak anesthesia discriminator)
+  pac: true                   # v13: δ-α PAC — propofol GABA_A fingerprint (Purdon 2013)
 
 model:
   cnn_channels: [32, 64, 128]
   cnn_kernel: 7
   feature_dim: 38
-  # = 5 bands + PE + SEF95 + LZC + BSRx3 + slope + gemg + sigma + slow_osc + zcr + hjorth_mob + hjorth_comp = 18/ch
+  # = 5 bands + PE + SEF95 + LZC + BSRx3 + slope + gemg + sigma + slow_osc + zcr + hjorth_mob + pac = 18/ch
   # 18 x 2ch + 2 (asym + SQI) = 38; feat_proj input = 38 + 2(SQI) = 40
   d_model: 128
   gru_layers: 2

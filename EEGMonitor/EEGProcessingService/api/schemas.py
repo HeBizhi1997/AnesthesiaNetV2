@@ -12,6 +12,9 @@ class ProcessRequest(BaseModel):
     pulse_wave: list[float] = []
     spo2: Optional[float] = None
     heart_rate: Optional[float] = None
+    # NSM device-reported band powers in dB (optional, for cross-validation)
+    # {"delta": dB_int, "theta": dB_int, "alpha": dB_int, "beta": dB_int, "gamma": dB_int}
+    device_band_powers_db: Optional[dict[str, int]] = None
 
 
 class ProcessResponse(BaseModel):
@@ -22,6 +25,7 @@ class ProcessResponse(BaseModel):
 
     # EEG components
     raw_eeg: list[float] = []
+    filtered_eeg: list[float] = []
     delta_wave: list[float] = []
     theta_wave: list[float] = []
     alpha_wave: list[float] = []
@@ -58,3 +62,13 @@ class ProcessResponse(BaseModel):
     hrv_rmssd: Optional[float] = None
     pulse_wave: list[float] = []
     spo2: Optional[float] = None
+
+    # Hardware diagnostics (NSM device specific)
+    hw_clipping_pct: float = 0.0
+    hw_dc_offset_uv: float = 0.0
+    hw_is_saturated: bool = False
+    hw_adc_range_uv: float = 0.0
+
+    # Device cross-validation (populated when device_band_powers_db is provided)
+    device_delta_ratio: Optional[float] = None
+    device_delta_discrepancy: Optional[float] = None

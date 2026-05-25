@@ -59,6 +59,7 @@ public sealed class EEGProcessingClient : IEEGProcessingClient
             spo2 = chunk.Samples.LastOrDefault()?.SpO2,
             heart_rate = chunk.Samples.LastOrDefault()?.HeartRate,
             pulse_wave = chunk.Samples.Select(s => s.PulseWaveValue ?? 0.0).ToArray(),
+            device_band_powers_db = chunk.DeviceBandPowersDb,
         };
 
         var json = JsonConvert.SerializeObject(request);

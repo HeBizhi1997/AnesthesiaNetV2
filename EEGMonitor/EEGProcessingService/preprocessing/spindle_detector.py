@@ -33,14 +33,27 @@ class SpindleDetector:
     SLEEP_THRESHOLD = 1.0  # spindles/min → likely sleep (low because 1s epochs fragment spindles)
 
     def __init__(self, fs: float = 100.0):
-        self.fs = fs
-        nyq = fs / 2.0
-        self._sos = butter(4, [self.SIGMA_LO / nyq, self.SIGMA_HI / nyq],
-                           btype="bandpass", output="sos")
-        # Rolling 60-second spindle event buffer
         self._event_times: deque[float] = deque()
         self._elapsed: float = 0.0
         self._spindle_count: int = 0
+        self._fs = fs
+        self._build_filter()
+
+    @property
+    def fs(self) -> float:
+        return self._fs
+
+    @fs.setter
+    def fs(self, value: float):
+        if value != self._fs:
+            self._fs = value
+            self._build_filter()
+            logger.info(f"SpindleDetector: fs updated to {value} Hz, sigma filter rebuilt")
+
+    def _build_filter(self):
+        nyq = self._fs / 2.0
+        self._sos = butter(4, [self.SIGMA_LO / nyq, self.SIGMA_HI / nyq],
+                           btype="bandpass", output="sos")
 
     def detect(self, eeg: np.ndarray) -> int:
         """

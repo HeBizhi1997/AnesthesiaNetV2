@@ -7,7 +7,7 @@ public interface IRecordingService
     bool IsRecording { get; }
     RecordingSession? CurrentSession { get; }
 
-    RecordingSession StartSession(string patientId, string surgeryType, string @operator = "");
+    RecordingSession StartSession(string patientId, string surgeryType, string @operator = "", int sampleRate = 256);
     Task StopSessionAsync();
     Task RecordRawSampleAsync(EEGSample sample);
     Task RecordResultAsync(ProcessedEEGResult result);

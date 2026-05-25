@@ -24,7 +24,7 @@ public partial class SimulationDialog : Window
         SpeedCombo.SelectedIndex = 2;
 
         SampleRateCombo.ItemsSource = new[] { 128, 256, 512 };
-        SampleRateCombo.SelectedItem = 256;
+        SampleRateCombo.SelectedItem = 128;
 
         // If simulator already running, restore UI state
         if (_simulator.IsRunning)
@@ -190,7 +190,7 @@ public partial class SimulationDialog : Window
         PulseTrack = PulseCombo.SelectedItem?.ToString() ?? "SNUADC/PLETH",
         Spo2Track = Spo2Combo.SelectedItem?.ToString() ?? "Solar8000/PLETH_SPO2",
         HrTrack = HrCombo.SelectedItem?.ToString() ?? "Solar8000/HR",
-        TargetSampleRate = SampleRateCombo.SelectedItem is int r ? r : 256,
+        TargetSampleRate = SampleRateCombo.SelectedItem is int r ? r : 128,
         PlaybackSpeed = ParseSpeed(),
     };
 

@@ -39,12 +39,12 @@ _propofol_alpha_cap:    float = 0.30
 
 def init_services(model_path: str | None = None):
     global _preprocessor, _hrv, _bis_predictor, _entropy, _fnox, _spindle
-    _preprocessor = EEGPreprocessor(sample_rate=256)
-    _hrv = HRVProcessor(sample_rate=256)
-    _bis_predictor = BISPredictor(model_path=model_path, sample_rate=256)
-    _entropy = EntropyProcessor(sample_rate=256)
+    _preprocessor = EEGPreprocessor(sample_rate=128)
+    _hrv = HRVProcessor(sample_rate=128)
+    _bis_predictor = BISPredictor(model_path=model_path, sample_rate=128)
+    _entropy = EntropyProcessor(sample_rate=128)
     _fnox = FNoxProcessor()
-    _spindle = SpindleDetector(fs=256.0)
+    _spindle = SpindleDetector(fs=100.0)  # NSM native rate; updated per-request if different
     logger.info("Processing services initialized")
 
 
@@ -56,6 +56,8 @@ async def health():
 @router.post("/reset")
 async def reset_state():
     """Reset stateful processors (call at the start of each monitoring session)."""
+    if _preprocessor is not None:
+        _preprocessor.reset()
     if _entropy is not None:
         _entropy.reset()
     if _bis_predictor is not None:
@@ -83,11 +85,14 @@ async def process_eeg(req: ProcessRequest):
     if _bis_predictor is not None and _bis_predictor.input_fs != req.sample_rate:
         _bis_predictor.input_fs = req.sample_rate
         _bis_predictor.reset_state()
+    if _spindle is not None and _spindle.fs != req.sample_rate:
+        _spindle.fs = req.sample_rate
 
 
-    # 1. EEG preprocessing
+    # 1. EEG preprocessing (with optional device band powers for cross-validation)
     try:
-        eeg_result = _preprocessor.preprocess(eeg)
+        device_db = req.device_band_powers_db or None
+        eeg_result = _preprocessor.preprocess(eeg, device_band_db=device_db)
     except Exception as e:
         logger.error(f"Preprocessing error: {e}")
         raise HTTPException(500, f"Preprocessing failed: {e}")
@@ -171,6 +176,7 @@ async def process_eeg(req: ProcessRequest):
         eeg_dominant_hz=eeg_result.get("eeg_dominant_hz", 0.0),
         eeg_tonal_ratio=eeg_result.get("eeg_tonal_ratio", 0.0),
         raw_eeg=eeg_result["raw_eeg"],
+        filtered_eeg=eeg_result["filtered_eeg"],
         delta_wave=eeg_result["delta_wave"],
         theta_wave=eeg_result["theta_wave"],
         alpha_wave=eeg_result["alpha_wave"],
@@ -197,13 +203,20 @@ async def process_eeg(req: ProcessRequest):
         hrv_rmssd=hrv_result.get("hrv_rmssd"),
         pulse_wave=hrv_result.get("pulse_wave", req.pulse_wave),
         spo2=req.spo2,
+        hw_clipping_pct=eeg_result.get("hw_clipping_pct", 0.0),
+        hw_dc_offset_uv=eeg_result.get("hw_dc_offset_uv", 0.0),
+        hw_is_saturated=eeg_result.get("hw_is_saturated", False),
+        hw_adc_range_uv=eeg_result.get("hw_adc_range_uv", 0.0),
+        device_delta_ratio=eeg_result.get("device_delta_ratio"),
+        device_delta_discrepancy=eeg_result.get("device_delta_discrepancy"),
     )
     se_val = entropy_result.get("se")
     re_val = entropy_result.get("re")
-    logger.debug(
-        f"Processed epoch: BIS={f'{bis:.1f}' if bis is not None else 'N/A'}, "
-        f"SE={f'{se_val:.1f}' if se_val is not None else 'N/A'}, "
-        f"RE={f'{re_val:.1f}' if re_val is not None else 'N/A'}, "
-        f"SQI={eeg_result['sqi']:.0f}"
+    logger.info(
+        f"BIS={f'{bis:.1f}' if bis is not None else 'N/A'} "
+        f"SE={f'{se_val:.1f}' if se_val is not None else 'N/A'} "
+        f"RE={f'{re_val:.1f}' if re_val is not None else 'N/A'} "
+        f"SQI={eeg_result['sqi']:.0f} "
+        f"Δ={eeg_result.get('delta_power', 0):.2f} α={eeg_result.get('alpha_power', 0):.2f}"
     )
     return response

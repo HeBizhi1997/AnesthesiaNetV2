@@ -1,0 +1,837 @@
+<Window x:Class="EEGMonitor.AnesthesiaSleep.Views.ShellWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:oxy="http://oxyplot.org/wpf"
+        xmlns:controls="clr-namespace:EEGMonitor.AnesthesiaSleep.Views.Controls"
+        xmlns:conv="clr-namespace:EEGMonitor.AnesthesiaSleep.Views.Converters"
+        Title="MERIDIAN 麻醉睡眠监测系统"
+        Height="900" Width="1600"
+        MinHeight="720" MinWidth="1280"
+        WindowState="Maximized"
+        Background="{StaticResource BgDeepBrush}"
+        Foreground="{StaticResource TextPrimaryBrush}">
+
+    <DockPanel Background="{StaticResource BgDeepBrush}">
+
+        <!-- ══ 顶部标题栏 ════════════════════════════════════════════════════ -->
+        <Border DockPanel.Dock="Top" Height="46"
+                Background="#040810" BorderBrush="#182C46" BorderThickness="0,0,0,1">
+            <Grid Margin="12,0">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+
+                <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+                    <TextBlock Text="麻醉睡眠监测系统" FontSize="15" FontWeight="Bold"
+                               Foreground="{StaticResource AccentCyanBrush}" Margin="0,0,16,0"/>
+                    <Rectangle Width="1" Fill="#182C46" Margin="0,8"/>
+                    <TextBlock Text=" " Width="8"/>
+                    <TextBlock FontSize="13" Foreground="{StaticResource TextPrimaryBrush}"
+                               VerticalAlignment="Center" Margin="4,0">
+                        <Run Text="患者  "/><Run Text="{Binding PatientId}" FontWeight="Bold"/>
+                    </TextBlock>
+                    <TextBlock Text="|" Foreground="#182C46" Margin="8,0" VerticalAlignment="Center"/>
+                    <TextBlock FontSize="13" Foreground="{StaticResource TextSecondaryBrush}"
+                               VerticalAlignment="Center">
+                        <Run Text="科室  "/><Run Text="{Binding SurgeryType}"/>
+                    </TextBlock>
+                </StackPanel>
+
+                <StackPanel Grid.Column="1" Orientation="Horizontal"
+                            HorizontalAlignment="Center" VerticalAlignment="Center">
+                    <Border CornerRadius="2" Padding="10,4" Margin="6,0" Background="#0C1422">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="记录时长 " FontSize="11" Foreground="#3D5A7A" VerticalAlignment="Center"/>
+                            <TextBlock Text="{Binding RecordingDuration}" FontSize="13" FontWeight="Bold"
+                                       Foreground="{StaticResource AccentCyanBrush}" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </Border>
+                    <Border CornerRadius="2" Padding="10,4" Margin="6,0">
+                        <Border.Style>
+                            <Style TargetType="Border">
+                                <Setter Property="Background" Value="#0C1422"/>
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsRecording}" Value="True">
+                                        <Setter Property="Background" Value="#0A2A14"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Border.Style>
+                        <TextBlock Text="● 记录中" FontSize="11" FontWeight="Bold"
+                                   Foreground="{StaticResource GreenOkBrush}" VerticalAlignment="Center"/>
+                    </Border>
+                    <Border CornerRadius="2" Padding="10,4" Margin="6,0"
+                            Background="{Binding IsServiceOnline, Converter={StaticResource BoolToVis},
+                                         ConverterParameter='#062010|#200606'}">
+                        <TextBlock FontSize="11">
+                            <Run Text="● "/>
+                            <Run Text="{Binding IsServiceOnline, Converter={StaticResource BoolToVis},
+                                                ConverterParameter='服务在线|服务离线'}"/>
+                        </TextBlock>
+                    </Border>
+                </StackPanel>
+
+                <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                    <Button Content="模拟测试" Style="{StaticResource ActionButtonStyle}"
+                            Command="{Binding OpenSimulationCommand}" Margin="0,0,8,0"/>
+                    <Button Content="夜间模式" Style="{StaticResource ActionButtonStyle}"
+                            Command="{Binding ToggleNightModeCommand}" Margin="0,0,12,0"/>
+                    <TextBlock Text="{Binding CurrentTimeDisplay}" FontSize="16" FontWeight="Bold"
+                               FontFamily="Consolas" Foreground="{StaticResource TextPrimaryBrush}"/>
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <!-- ══ 连接控制栏 ════════════════════════════════════════════════════ -->
+        <Border DockPanel.Dock="Top" Background="#070C18" BorderBrush="#182C46" BorderThickness="0,0,0,1"
+                Padding="10,5">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+
+                <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+                    <ComboBox ItemsSource="{Binding AvailablePorts}" SelectedItem="{Binding SelectedPort}"
+                              Style="{StaticResource DarkComboStyle}" MinWidth="80" Margin="0,0,6,0"/>
+                    <ComboBox ItemsSource="{Binding BaudRates}" SelectedItem="{Binding SelectedBaudRate}"
+                              Style="{StaticResource DarkComboStyle}" MinWidth="80" Margin="0,0,6,0"/>
+                    <ComboBox ItemsSource="{Binding DeviceTypes}" SelectedItem="{Binding SelectedDeviceType}"
+                              Style="{StaticResource DarkComboStyle}" MinWidth="100" Margin="0,0,6,0"/>
+                    <ComboBox ItemsSource="{Binding NsmSampleRates}" SelectedItem="{Binding NsmSampleRate}"
+                              Style="{StaticResource DarkComboStyle}" MinWidth="70"
+                              Visibility="{Binding NsmSampleRateVisible}" Margin="0,0,6,0"/>
+                    <Button Content="{Binding IsConnected, Converter={StaticResource BoolToVis},
+                                            ConverterParameter='断开连接|连接设备'}"
+                            Style="{StaticResource ActionButtonStyle}" Margin="4,0"
+                            Command="{Binding ConnectCommand}"/>
+
+                    <Rectangle Width="1" Fill="#182C46" Margin="12,4"/>
+                    <ComboBox ItemsSource="{Binding AvailablePulsePorts}" SelectedItem="{Binding SelectedPulsePort}"
+                              Style="{StaticResource DarkComboStyle}" MinWidth="80" Margin="6,0"/>
+                    <Button Content="{Binding IsPulseConnected, Converter={StaticResource BoolToVis},
+                                            ConverterParameter='脉搏断开|脉搏连接'}"
+                            Style="{StaticResource ActionButtonStyle}" Margin="4,0"
+                            Command="{Binding PulseConnectCommand}"/>
+                </StackPanel>
+
+                <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Center"
+                            VerticalAlignment="Center">
+                    <TextBox Text="{Binding PatientId, UpdateSourceTrigger=PropertyChanged}"
+                             Style="{StaticResource DarkTextBoxStyle}" MinWidth="120"
+                             Tag="患者ID" Margin="6,0"/>
+                    <TextBox Text="{Binding SurgeryType, UpdateSourceTrigger=PropertyChanged}"
+                             Style="{StaticResource DarkTextBoxStyle}" MinWidth="100"
+                             Tag="科室" Margin="6,0"/>
+                    <Button Content="{Binding IsRecording, Converter={StaticResource BoolToVis},
+                                            ConverterParameter='停止记录|开始记录'}"
+                            Command="{Binding ToggleRecordingCommand}" Margin="12,0,4,0">
+                        <Button.Style>
+                            <Style TargetType="Button" BasedOn="{StaticResource ActionButtonStyle}">
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsRecording}" Value="True">
+                                        <Setter Property="Background" Value="#2A0A0C"/>
+                                        <Setter Property="Foreground" Value="{StaticResource RedCritBrush}"/>
+                                        <Setter Property="BorderBrush" Value="{StaticResource RedCritBrush}"/>
+                                    </DataTrigger>
+                                    <DataTrigger Binding="{Binding IsRecording}" Value="False">
+                                        <Setter Property="Background" Value="#0A2A14"/>
+                                        <Setter Property="Foreground" Value="{StaticResource GreenOkBrush}"/>
+                                        <Setter Property="BorderBrush" Value="{StaticResource GreenOkBrush}"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Button.Style>
+                    </Button>
+                    <Button Content="复位" Style="{StaticResource ActionButtonStyle}"
+                            Command="{Binding ResetSessionCommand}" Margin="4,0"/>
+                </StackPanel>
+
+                <TextBlock Grid.Column="2" Text="{Binding StatusMessage}" FontSize="11"
+                           Foreground="{StaticResource TextSecondaryBrush}" VerticalAlignment="Center"
+                           HorizontalAlignment="Right" TextTrimming="CharacterEllipsis" MaxWidth="320"
+                           Margin="12,0,0,0"/>
+            </Grid>
+        </Border>
+
+        <!-- ══ 底部状态栏 ═══════════════════════════════════════════════════ -->
+        <Border DockPanel.Dock="Bottom" Background="#040810" BorderBrush="#182C46"
+                BorderThickness="0,1,0,0" Padding="12,4">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Grid.Column="0" Text="{Binding Staging.CurrentStageLabel, StringFormat='分期: {0}'}"
+                           FontSize="11" Foreground="{StaticResource AccentCyanBrush}" Margin="0,0,16,0"/>
+                <TextBlock Grid.Column="1" FontSize="11" Foreground="{StaticResource TextSecondaryBrush}" Margin="0,0,16,0">
+                    <Run Text="Epoch: "/>
+                    <Run Text="{Binding Staging.EpochCount}" Foreground="{StaticResource TextPrimaryBrush}"/>
+                </TextBlock>
+                <TextBlock Grid.Column="2" Text="{Binding StatusMessage}" FontSize="11"
+                           Foreground="{StaticResource TextSecondaryBrush}" TextTrimming="CharacterEllipsis"/>
+                <TextBlock Grid.Column="3" FontSize="11" Foreground="{StaticResource TextSecondaryBrush}" HorizontalAlignment="Right">
+                    <Run Text="脉搏: "/>
+                    <Run Text="{Binding PulseStatusMessage}"/>
+                </TextBlock>
+            </Grid>
+        </Border>
+
+        <!-- ══ 主内容区：滚动仪表盘 ════════════════════════════════════════ -->
+        <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
+                      Background="{StaticResource BgPanelBrush}">
+
+            <StackPanel Margin="10,8">
+
+                <!-- ── 第1行: 当前分期 + 统计摘要 ──────────────────────────── -->
+                <Grid Margin="0,0,0,6">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="280"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+
+                    <!-- 当前分期卡片 -->
+                    <Border Grid.Column="0" Style="{StaticResource CardBorderStyle}" Padding="16,10">
+                        <StackPanel>
+                            <TextBlock Text="当前分期" FontSize="11" Foreground="{StaticResource TextSecondaryBrush}"/>
+                            <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
+                                <Ellipse Width="18" Height="18" Margin="0,0,10,0"
+                                         Fill="{Binding Staging.CurrentStage, Converter={StaticResource StageColorConverter}}"/>
+                                <TextBlock Text="{Binding Staging.CurrentStage, Converter={StaticResource StageLabelConverter}}"
+                                           FontSize="20" FontWeight="Bold" Foreground="{StaticResource AccentCyanBrush}"
+                                           VerticalAlignment="Center" Margin="0,0,12,0"/>
+                                <TextBlock FontSize="11" Foreground="{StaticResource TextSecondaryBrush}" VerticalAlignment="Center">
+                                    <Run Text="置信度: "/>
+                                    <Run Text="{Binding Staging.CurrentConfidence, StringFormat={}{0:P1}}"
+                                         Foreground="{StaticResource TextPrimaryBrush}"/>
+                                </TextBlock>
+                            </StackPanel>
+                            <TextBlock Margin="0,6,0,0" FontSize="11" Foreground="{StaticResource TextSecondaryBrush}">
+                                <Run Text="总计 Epoch: "/>
+                                <Run Text="{Binding Staging.EpochCount}" Foreground="{StaticResource TextPrimaryBrush}"/>
+                            </TextBlock>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- 快速统计卡片 -->
+                    <UniformGrid Grid.Column="1" Columns="4" Margin="8,0,0,0">
+                        <Border Style="{StaticResource CardBorderStyle}" Padding="8" Margin="2">
+                            <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
+                                <TextBlock Text="TST" FontSize="10" Foreground="{StaticResource TextSecondaryBrush}"/>
+                                <TextBlock Text="{Binding Statistics.TstMinutes, StringFormat={}{0:F0} min}"
+                                           FontSize="16" FontWeight="Bold" Foreground="{StaticResource AccentCyanBrush}"/>
+                            </StackPanel>
+                        </Border>
+                        <Border Style="{StaticResource CardBorderStyle}" Padding="8" Margin="2">
+                            <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
+                                <TextBlock Text="睡眠效率" FontSize="10" Foreground="{StaticResource TextSecondaryBrush}"/>
+                                <TextBlock Text="{Binding Statistics.SePercent, StringFormat={}{0:F0}%}"
+                                           FontSize="16" FontWeight="Bold" Foreground="{StaticResource GreenOkBrush}"/>
+                            </StackPanel>
+                        </Border>
+                        <Border Style="{StaticResource CardBorderStyle}" Padding="8" Margin="2">
+                            <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
+                                <TextBlock Text="觉醒指数" FontSize="10" Foreground="{StaticResource TextSecondaryBrush}"/>
+                                <TextBlock Text="{Binding Statistics.ArousalIndex, StringFormat={}{0:F1}/hr}"
+                                           FontSize="16" FontWeight="Bold" Foreground="{StaticResource OrangeBrush}"/>
+                            </StackPanel>
+                        </Border>
+                        <Border Style="{StaticResource CardBorderStyle}" Padding="8" Margin="2">
+                            <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
+                                <TextBlock Text="SOL" FontSize="10" Foreground="{StaticResource TextSecondaryBrush}"/>
+                                <TextBlock Text="{Binding Statistics.SolMinutes, StringFormat={}{0:F0} min}"
+                                           FontSize="16" FontWeight="Bold" Foreground="{StaticResource AmberBrush}"/>
+                            </StackPanel>
+                        </Border>
+                    </UniformGrid>
+                </Grid>
+
+                <!-- ── 第2行: 脑电波形 + 生命体征 ───────────────────────────── -->
+                <Grid Margin="0,0,0,6">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="2.5*"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+
+                    <!-- EEG 原始波形 -->
+                    <Border Grid.Column="0" Style="{StaticResource CardBorderStyle}" Padding="4">
+                        <Grid>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="160"/>
+                            </Grid.RowDefinitions>
+
+                            <Border Grid.Row="0" Style="{StaticResource SectionLabelStyle}">
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Text="脑电波形 (EEG)" FontSize="11" FontWeight="Bold"
+                                               Foreground="{StaticResource TextSecondaryBrush}"/>
+                                    <TextBlock Text=" | " Foreground="{StaticResource BorderBrush}" Margin="8,0"/>
+                                    <TextBlock FontSize="10" Foreground="{StaticResource TextSecondaryBrush}" VerticalAlignment="Center">
+                                        <Run Text="采样率: 128 Hz  "/>
+                                        <Run Text="量程: ±100 μV"/>
+                                    </TextBlock>
+                                </StackPanel>
+                            </Border>
+
+                            <oxy:PlotView Grid.Row="1" Model="{Binding EegPlotModel}" Margin="4,2"/>
+                        </Grid>
+                    </Border>
+
+                    <!-- 生命体征卡片 -->
+                    <Border Grid.Column="1" Style="{StaticResource CardBorderStyle}" Padding="8" Margin="8,0,0,0">
+                        <Grid>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="*"/>
+                            </Grid.RowDefinitions>
+
+                            <Border Grid.Row="0" Style="{StaticResource SectionLabelStyle}" Margin="-8,0,-8,6">
+                                <TextBlock Text="生命体征" FontSize="11" FontWeight="Bold"
+                                           Foreground="{StaticResource TextSecondaryBrush}"/>
+                            </Border>
+
+                            <UniformGrid Grid.Row="1" Columns="2" Rows="4">
+                                <!-- HR -->
+                                <Border Background="#0C1422" Padding="6" Margin="1">
+                                    <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
+                                        <TextBlock Text="心率" FontSize="9" Foreground="{StaticResource TextSecondaryBrush}"/>
+                                        <TextBlock Text="{Binding Simulation.LatestVitals.HeartRate, FallbackValue=---}"
+                                                   FontSize="18" FontWeight="Bold" Foreground="{StaticResource RedCritBrush}"/>
+                                        <TextBlock Text="bpm" FontSize="8" Foreground="{StaticResource TextSecondaryBrush}"/>
+                                    </StackPanel>
+                                </Border>
+                                <!-- SpO2 -->
+                                <Border Background="#0C1422" Padding="6" Margin="1">
+                                    <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
+                                        <TextBlock Text="血氧" FontSize="9" Foreground="{StaticResource TextSecondaryBrush}"/>
+                                        <TextBlock FontSize="18" FontWeight="Bold" Foreground="{StaticResource GreenOkBrush}">
+                                            <Run Text="{Binding SpO2Trend.CurrentSpO2, Converter={StaticResource NaNConv}, ConverterParameter='F0', FallbackValue=---}"/>
+                                            <Run Text="%" FontSize="10"/>
+                                        </TextBlock>
+                                        <TextBlock Text="SpO2" FontSize="8" Foreground="{StaticResource TextSecondaryBrush}"/>
+                                    </StackPanel>
+                                </Border>
+                                <!-- NIBP -->
+                                <Border Background="#0C1422" Padding="6" Margin="1">
+                                    <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
+                                        <TextBlock Text="无创血压" FontSize="9" Foreground="{StaticResource TextSecondaryBrush}"/>
+                                        <TextBlock FontSize="16" FontWeight="Bold"
+                                                   Foreground="{StaticResource AccentCyanBrush}">
+                                            <Run Text="{Binding Simulation.LatestVitals.SystolicBP, FallbackValue=---}"/>
+                                            <Run Text="/" FontSize="10" Foreground="{StaticResource TextSecondaryBrush}"/>
+                                            <Run Text="{Binding Simulation.LatestVitals.DiastolicBP, FallbackValue=---}"/>
+                                        </TextBlock>
+                                        <TextBlock Text="mmHg" FontSize="8" Foreground="{StaticResource TextSecondaryBrush}"/>
+                                    </StackPanel>
+                                </Border>
+                                <!-- MAP -->
+                                <Border Background="#0C1422" Padding="6" Margin="1">
+                                    <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
+                                        <TextBlock Text="平均动脉压" FontSize="9" Foreground="{StaticResource TextSecondaryBrush}"/>
+                                        <TextBlock Text="{Binding Simulation.LatestVitals.MAP, FallbackValue=---}"
+                                                   FontSize="18" FontWeight="Bold" Foreground="{StaticResource AccentCyanBrush}"/>
+                                        <TextBlock Text="mmHg" FontSize="8" Foreground="{StaticResource TextSecondaryBrush}"/>
+                                    </StackPanel>
+                                </Border>
+                                <!-- RR -->
+                                <Border Background="#0C1422" Padding="6" Margin="1">
+                                    <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
+                                        <TextBlock Text="呼吸频率" FontSize="9" Foreground="{StaticResource TextSecondaryBrush}"/>
+                                        <TextBlock Text="{Binding Simulation.LatestVitals.RespiratoryRate, FallbackValue=---}"
+                                                   FontSize="18" FontWeight="Bold" Foreground="{StaticResource AmberBrush}"/>
+                                        <TextBlock Text="bpm" FontSize="8" Foreground="{StaticResource TextSecondaryBrush}"/>
+                                    </StackPanel>
+                                </Border>
+                                <!-- EtCO2 -->
+                                <Border Background="#0C1422" Padding="6" Margin="1">
+                                    <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
+                                        <TextBlock Text="呼气末CO2" FontSize="9" Foreground="{StaticResource TextSecondaryBrush}"/>
+                                        <TextBlock Text="{Binding Simulation.LatestVitals.EtCO2, FallbackValue=---}"
+                                                   FontSize="18" FontWeight="Bold" Foreground="{StaticResource YellowWarnBrush}"/>
+                                        <TextBlock Text="mmHg" FontSize="8" Foreground="{StaticResource TextSecondaryBrush}"/>
+                                    </StackPanel>
+                                </Border>
+                                <!-- Temp -->
+                                <Border Background="#0C1422" Padding="6" Margin="1">
+                                    <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
+                                        <TextBlock Text="体温" FontSize="9" Foreground="{StaticResource TextSecondaryBrush}"/>
+                                        <TextBlock Text="{Binding Simulation.LatestVitals.Temperature, StringFormat={}{0:F1}, FallbackValue=--.-}"
+                                                   FontSize="18" FontWeight="Bold" Foreground="{StaticResource OrangeBrush}"/>
+                                        <TextBlock Text="°C" FontSize="8" Foreground="{StaticResource TextSecondaryBrush}"/>
+                                    </StackPanel>
+                                </Border>
+                                <!-- Recording Status -->
+                                <Border Background="#0C1422" Padding="6" Margin="1">
+                                    <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
+                                        <TextBlock Text="记录状态" FontSize="9" Foreground="{StaticResource TextSecondaryBrush}"/>
+                                        <TextBlock FontSize="14" FontWeight="Bold"
+                                                   Foreground="{StaticResource GreenOkBrush}">
+                                            <Run Text="{Binding IsRecording, Converter={StaticResource BoolToVis},
+                                                        ConverterParameter='记录中|待机'}"/>
+                                        </TextBlock>
+                                        <TextBlock Text="{Binding RecordingDuration}" FontSize="8"
+                                                   Foreground="{StaticResource TextSecondaryBrush}"/>
+                                    </StackPanel>
+                                </Border>
+                            </UniformGrid>
+                        </Grid>
+                    </Border>
+                </Grid>
+
+                <!-- ── 第3行: 催眠图 + 睡眠结构分布 ─────────────────────────── -->
+                <Grid Margin="0,0,0,6">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="2.5*"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+
+                    <!-- 催眠图 -->
+                    <Border Grid.Column="0" Style="{StaticResource CardBorderStyle}" Padding="4">
+                        <Grid>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="280"/>
+                                <RowDefinition Height="44"/>
+                            </Grid.RowDefinitions>
+
+                            <!-- 图例 -->
+                            <Border Grid.Row="0" Style="{StaticResource SectionLabelStyle}">
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Text="催眠图" FontSize="11" FontWeight="Bold"
+                                               Foreground="{StaticResource TextSecondaryBrush}"/>
+                                    <StackPanel Orientation="Horizontal" Margin="16,0,0,0">
+                                        <Ellipse Width="8" Height="8" Fill="#6B7080" Margin="0,0,3,0"/>
+                                        <TextBlock Text="清醒" FontSize="10" Foreground="{StaticResource TextSecondaryBrush}" Margin="0,0,8,0"/>
+                                        <Ellipse Width="8" Height="8" Fill="#F0A020" Margin="0,0,3,0"/>
+                                        <TextBlock Text="N1" FontSize="10" Foreground="{StaticResource TextSecondaryBrush}" Margin="0,0,8,0"/>
+                                        <Ellipse Width="8" Height="8" Fill="{StaticResource AccentCyanBrush}" Margin="0,0,3,0"/>
+                                        <TextBlock Text="N2" FontSize="10" Foreground="{StaticResource TextSecondaryBrush}" Margin="0,0,8,0"/>
+                                        <Ellipse Width="8" Height="8" Fill="{StaticResource DeltaBrush}" Margin="0,0,3,0"/>
+                                        <TextBlock Text="N3" FontSize="10" Foreground="{StaticResource TextSecondaryBrush}" Margin="0,0,8,0"/>
+                                        <Ellipse Width="8" Height="8" Fill="#E040C0" Margin="0,0,3,0"/>
+                                        <TextBlock Text="REM" FontSize="10" Foreground="{StaticResource TextSecondaryBrush}"/>
+                                    </StackPanel>
+                                </StackPanel>
+                            </Border>
+
+                            <!-- Chart -->
+                            <oxy:PlotView Grid.Row="2" Model="{Binding Staging.HypnogramModel}"/>
+
+                            <!-- Epoch strip -->
+                            <ItemsControl Grid.Row="3" ItemsSource="{Binding Staging.RecentEpochs}" Margin="4,0">
+                                <ItemsControl.ItemsPanel>
+                                    <ItemsPanelTemplate><StackPanel Orientation="Horizontal"/></ItemsPanelTemplate>
+                                </ItemsControl.ItemsPanel>
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Border Width="6" Height="40" CornerRadius="1" Margin="1,2"
+                                                Background="{Binding Stage, Converter={StaticResource StageColorConverter}}"
+                                                ToolTip="{Binding Stage}"/>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </Grid>
+                    </Border>
+
+                    <!-- 睡眠结构分布 -->
+                    <Border Grid.Column="1" Style="{StaticResource CardBorderStyle}" Padding="10" Margin="8,0,0,0">
+                        <Grid>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="*"/>
+                            </Grid.RowDefinitions>
+
+                            <Border Grid.Row="0" Style="{StaticResource SectionLabelStyle}" Margin="-10,0,-10,8">
+                                <TextBlock Text="睡眠结构分布" FontSize="11" FontWeight="Bold"
+                                           Foreground="{StaticResource TextSecondaryBrush}"/>
+                            </Border>
+
+                            <StackPanel Grid.Row="1" VerticalAlignment="Center">
+                                <!-- Stacked bar -->
+                                <Grid Height="20" Margin="0,0,0,10">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="{Binding Statistics.N1Percent, Converter={StaticResource PctToStarConverter}}"/>
+                                        <ColumnDefinition Width="{Binding Statistics.N2Percent, Converter={StaticResource PctToStarConverter}}"/>
+                                        <ColumnDefinition Width="{Binding Statistics.N3Percent, Converter={StaticResource PctToStarConverter}}"/>
+                                        <ColumnDefinition Width="{Binding Statistics.RemPercent, Converter={StaticResource PctToStarConverter}}"/>
+                                    </Grid.ColumnDefinitions>
+                                    <Border Grid.Column="0" Background="#F0A020" CornerRadius="2,0,0,2" MinWidth="4"
+                                            ToolTip="{Binding Statistics.N1Percent, StringFormat='N1: {0:F0}%'}"/>
+                                    <Border Grid.Column="1" Background="{StaticResource AccentCyanBrush}" MinWidth="4"
+                                            ToolTip="{Binding Statistics.N2Percent, StringFormat='N2: {0:F0}%'}"/>
+                                    <Border Grid.Column="2" Background="{StaticResource DeltaBrush}" MinWidth="4"
+                                            ToolTip="{Binding Statistics.N3Percent, StringFormat='N3: {0:F0}%'}"/>
+                                    <Border Grid.Column="3" Background="#E040C0" CornerRadius="0,2,2,0" MinWidth="4"
+                                            ToolTip="{Binding Statistics.RemPercent, StringFormat='REM: {0:F0}%'}"/>
+                                </Grid>
+
+                                <!-- Stage breakdown -->
+                                <UniformGrid Columns="2" Rows="4">
+                                    <StackPanel Margin="0,3">
+                                        <StackPanel Orientation="Horizontal">
+                                            <Rectangle Width="10" Height="10" Fill="#F0A020" Margin="0,0,4,0"/>
+                                            <TextBlock FontSize="11" Foreground="{StaticResource TextPrimaryBrush}">
+                                                <Run Text="N1  "/><Run Text="{Binding Statistics.N1Percent, StringFormat={}{0:F0}%}" FontWeight="Bold"/>
+                                            </TextBlock>
+                                        </StackPanel>
+                                    </StackPanel>
+                                    <StackPanel Margin="0,3">
+                                        <StackPanel Orientation="Horizontal">
+                                            <Rectangle Width="10" Height="10" Fill="{StaticResource AccentCyanBrush}" Margin="0,0,4,0"/>
+                                            <TextBlock FontSize="11" Foreground="{StaticResource TextPrimaryBrush}">
+                                                <Run Text="N2  "/><Run Text="{Binding Statistics.N2Percent, StringFormat={}{0:F0}%}" FontWeight="Bold"/>
+                                            </TextBlock>
+                                        </StackPanel>
+                                    </StackPanel>
+                                    <StackPanel Margin="0,3">
+                                        <StackPanel Orientation="Horizontal">
+                                            <Rectangle Width="10" Height="10" Fill="{StaticResource DeltaBrush}" Margin="0,0,4,0"/>
+                                            <TextBlock FontSize="11" Foreground="{StaticResource TextPrimaryBrush}">
+                                                <Run Text="N3  "/><Run Text="{Binding Statistics.N3Percent, StringFormat={}{0:F0}%}" FontWeight="Bold"/>
+                                            </TextBlock>
+                                        </StackPanel>
+                                    </StackPanel>
+                                    <StackPanel Margin="0,3">
+                                        <StackPanel Orientation="Horizontal">
+                                            <Rectangle Width="10" Height="10" Fill="#E040C0" Margin="0,0,4,0"/>
+                                            <TextBlock FontSize="11" Foreground="{StaticResource TextPrimaryBrush}">
+                                                <Run Text="REM "/><Run Text="{Binding Statistics.RemPercent, StringFormat={}{0:F0}%}" FontWeight="Bold"/>
+                                            </TextBlock>
+                                        </StackPanel>
+                                    </StackPanel>
+                                    <StackPanel Margin="0,3">
+                                        <TextBlock FontSize="11" Foreground="{StaticResource TextSecondaryBrush}">
+                                            <Run Text="WASO "/>
+                                            <Run Text="{Binding Statistics.WasoMinutes, StringFormat={}{0:F0} min}" Foreground="{StaticResource TextPrimaryBrush}"/>
+                                        </TextBlock>
+                                    </StackPanel>
+                                    <StackPanel Margin="0,3">
+                                        <TextBlock FontSize="11" Foreground="{StaticResource TextSecondaryBrush}">
+                                            <Run Text="REM Lat "/>
+                                            <Run Text="{Binding Statistics.RemLatencyMinutes, StringFormat={}{0:F0} min}" Foreground="{StaticResource TextPrimaryBrush}"/>
+                                        </TextBlock>
+                                    </StackPanel>
+                                    <StackPanel Margin="0,3">
+                                        <TextBlock FontSize="11" Foreground="{StaticResource TextSecondaryBrush}">
+                                            <Run Text="Epochs "/>
+                                            <Run Text="{Binding Statistics.TotalEpochs}" Foreground="{StaticResource TextPrimaryBrush}"/>
+                                        </TextBlock>
+                                    </StackPanel>
+                                    <StackPanel Margin="0,3">
+                                        <TextBlock FontSize="11" Foreground="{StaticResource TextSecondaryBrush}">
+                                            <Run Text="时长 "/>
+                                            <Run Text="{Binding Statistics.RecordingDurationMinutes, StringFormat={}{0:F0} min}" Foreground="{StaticResource TextPrimaryBrush}"/>
+                                        </TextBlock>
+                                    </StackPanel>
+                                </UniformGrid>
+                            </StackPanel>
+                        </Grid>
+                    </Border>
+                </Grid>
+
+                <!-- ── 第3行: SpO2 血氧 ───────────────────────────────────── -->
+                <Border Style="{StaticResource CardBorderStyle}" Padding="4" Margin="0,0,0,6">
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="180"/>
+                        </Grid.RowDefinitions>
+
+                        <!-- SpO2 脱氧告警横幅 -->
+                        <Border Grid.Row="0" Background="#2A0808" BorderBrush="{StaticResource RedCritBrush}" BorderThickness="1"
+                                CornerRadius="2" Padding="10,3" Margin="4,4,4,0"
+                                Visibility="{Binding SpO2Trend.HasSpO2Alert, Converter={StaticResource BoolToVis}}">
+                            <TextBlock Text="{Binding SpO2Trend.Spo2AlertText, StringFormat='⚠ 脱氧告警: {0}'}"
+                                       FontSize="12" FontWeight="SemiBold" Foreground="{StaticResource RedCritBrush}"/>
+                        </Border>
+
+                        <!-- SpO2 卡片行 -->
+                        <Border Grid.Row="0" Style="{StaticResource SectionLabelStyle}" Margin="0,0,0,4">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="血氧饱和度 (SpO2)" FontSize="11" FontWeight="Bold"
+                                           Foreground="{StaticResource TextSecondaryBrush}"/>
+                                <TextBlock Text=" | " Foreground="{StaticResource BorderBrush}" Margin="8,0"/>
+                                <TextBlock Foreground="{StaticResource TextSecondaryBrush}" FontSize="10" VerticalAlignment="Center">
+                                    <Run Text="当前: "/>
+                                    <Run Text="{Binding SpO2Trend.CurrentSpO2, StringFormat={}{0:F0}%}" Foreground="{StaticResource TextPrimaryBrush}" FontWeight="Bold"/>
+                                    <Run Text="  平均: "/>
+                                    <Run Text="{Binding SpO2Trend.MeanSpO2, Converter={StaticResource NaNConv}, ConverterParameter='F0'}" Foreground="{StaticResource GreenOkBrush}"/><Run Text="%"/>
+                                    <Run Text="  最低: "/>
+                                    <Run Text="{Binding SpO2Trend.MinSpO2, Converter={StaticResource NaNConv}, ConverterParameter='F0'}" Foreground="{StaticResource RedCritBrush}"/><Run Text="%"/>
+                                    <Run Text="  ODI₃: "/>
+                                    <Run Text="{Binding SpO2Trend.Odi3, Converter={StaticResource NaNConv}, ConverterParameter='F1'}" Foreground="{StaticResource YellowWarnBrush}"/><Run Text="/hr"/>
+                                    <Run Text="  ODI₄: "/>
+                                    <Run Text="{Binding SpO2Trend.Odi4, Converter={StaticResource NaNConv}, ConverterParameter='F1'}" Foreground="{StaticResource OrangeBrush}"/><Run Text="/hr"/>
+                                    <Run Text="  T90: "/>
+                                    <Run Text="{Binding SpO2Trend.T90Percent, Converter={StaticResource NaNConv}, ConverterParameter='F0'}" Foreground="{StaticResource RedCritBrush}"/><Run Text="%"/>
+                                </TextBlock>
+                            </StackPanel>
+                        </Border>
+
+                        <!-- Chart -->
+                        <oxy:PlotView Grid.Row="2" Model="{Binding SpO2Trend.SpO2TrendModel}" Margin="4,0"/>
+                    </Grid>
+                </Border>
+
+                <!-- ── 第4行: 临床操作区（用药 + 镇静 + 体位） ──────────────── -->
+                <Grid Margin="0,0,0,6">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+
+                    <!-- 用药记录 -->
+                    <Border Grid.Column="0" Style="{StaticResource CardBorderStyle}" Padding="10" Margin="0,0,4,0">
+                        <Grid>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="160"/>
+                            </Grid.RowDefinitions>
+
+                            <Border Grid.Row="0" Style="{StaticResource SectionLabelStyle}" Margin="-10,0,-10,6">
+                                <TextBlock Text="用药记录" FontSize="11" FontWeight="Bold"
+                                           Foreground="{StaticResource TextSecondaryBrush}"/>
+                            </Border>
+
+                            <!-- Compact drug entry -->
+                            <Grid Grid.Row="1" Margin="0,0,0,4">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="50"/>
+                                    <ColumnDefinition Width="50"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBox Text="{Binding DrugAdmin.DrugName, UpdateSourceTrigger=PropertyChanged}"
+                                         Style="{StaticResource DarkTextBoxStyle}" Tag="药物名称"/>
+                                <TextBox Grid.Column="1" Text="{Binding DrugAdmin.Dose, UpdateSourceTrigger=PropertyChanged}"
+                                         Style="{StaticResource DarkTextBoxStyle}" Tag="剂量" Margin="4,0"/>
+                                <ComboBox Grid.Column="2" ItemsSource="{Binding DrugAdmin.DoseUnits}"
+                                          SelectedItem="{Binding DrugAdmin.DoseUnit}"
+                                          Style="{StaticResource DarkComboStyle}" Margin="4,0"/>
+                                <Button Grid.Column="3" Content="添加" Command="{Binding DrugAdmin.AddDrugCommand}"
+                                        Style="{StaticResource PrimaryButtonStyle}" Padding="10,4" Margin="4,0,0,0"/>
+                            </Grid>
+
+                            <!-- Drug timeline -->
+                            <ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Auto">
+                                <ItemsControl ItemsSource="{Binding DrugAdmin.DrugRecords}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <Border Background="#0C1422" Padding="6,3" Margin="0,1"
+                                                    BorderBrush="#182C46" BorderThickness="0,0,0,1">
+                                                <StackPanel Orientation="Horizontal">
+                                                    <TextBlock Text="{Binding AdministrationTime, StringFormat=HH:mm}"
+                                                               FontSize="10" Foreground="{StaticResource TextSecondaryBrush}"
+                                                               Width="40" VerticalAlignment="Center"/>
+                                                    <TextBlock FontSize="11" Foreground="{StaticResource TextPrimaryBrush}" Margin="6,0">
+                                                        <Run Text="{Binding DrugName}" FontWeight="SemiBold"/>
+                                                        <Run Text=" "/><Run Text="{Binding Dose, StringFormat={}{0:F1}}"/>
+                                                        <Run Text="{Binding DoseUnit}" Foreground="{StaticResource TextSecondaryBrush}"/>
+                                                        <Run Text=" "/><Run Text="{Binding Route}" Foreground="{StaticResource TextSecondaryBrush}"/>
+                                                    </TextBlock>
+                                                </StackPanel>
+                                            </Border>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </ScrollViewer>
+                        </Grid>
+                    </Border>
+
+                    <!-- 镇静评分 -->
+                    <Border Grid.Column="1" Style="{StaticResource CardBorderStyle}" Padding="10" Margin="4,0">
+                        <Grid>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="*"/>
+                            </Grid.RowDefinitions>
+
+                            <Border Grid.Row="0" Style="{StaticResource SectionLabelStyle}" Margin="-10,0,-10,6">
+                                <TextBlock Text="镇静评估" FontSize="11" FontWeight="Bold"
+                                           Foreground="{StaticResource TextSecondaryBrush}"/>
+                            </Border>
+
+                            <!-- Scale selector -->
+                            <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,0,0,4">
+                                <Button Content="Ramsay" Width="60" Command="{Binding Sedation.SetScaleTypeCommand}"
+                                        CommandParameter="Ramsay" Style="{StaticResource ActionButtonStyle}"
+                                        FontSize="10" Padding="6,3" Margin="0,0,4,0"/>
+                                <Button Content="RASS" Width="45" Command="{Binding Sedation.SetScaleTypeCommand}"
+                                        CommandParameter="RASS" Style="{StaticResource ActionButtonStyle}"
+                                        FontSize="10" Padding="6,3" Margin="0,0,4,0"/>
+                                <Button Content="MOAA/S" Width="55" Command="{Binding Sedation.SetScaleTypeCommand}"
+                                        CommandParameter="MOAAS" Style="{StaticResource ActionButtonStyle}"
+                                        FontSize="10" Padding="6,3"/>
+                                <TextBlock Text="{Binding Sedation.SelectedScaleType, StringFormat=' [{0}]'}"
+                                           FontSize="11" Foreground="{StaticResource AccentCyanBrush}"
+                                           VerticalAlignment="Center" Margin="8,0,0,0"/>
+                            </StackPanel>
+
+                            <!-- Score buttons + record -->
+                            <Grid Grid.Row="2" Margin="0,0,0,4">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <WrapPanel>
+                                    <Button Content="5" Command="{Binding Sedation.SetScoreCommand}" CommandParameter="5"
+                                            Style="{StaticResource ActionButtonStyle}" Width="28" Height="26" FontSize="10"
+                                            Padding="0" Margin="0,0,2,2"/>
+                                    <Button Content="4" Command="{Binding Sedation.SetScoreCommand}" CommandParameter="4"
+                                            Style="{StaticResource ActionButtonStyle}" Width="28" Height="26" FontSize="10"
+                                            Padding="0" Margin="0,0,2,2"/>
+                                    <Button Content="3" Command="{Binding Sedation.SetScoreCommand}" CommandParameter="3"
+                                            Style="{StaticResource ActionButtonStyle}" Width="28" Height="26" FontSize="10"
+                                            Padding="0" Margin="0,0,2,2"/>
+                                    <Button Content="2" Command="{Binding Sedation.SetScoreCommand}" CommandParameter="2"
+                                            Style="{StaticResource ActionButtonStyle}" Width="28" Height="26" FontSize="10"
+                                            Padding="0" Margin="0,0,2,2"/>
+                                    <Button Content="1" Command="{Binding Sedation.SetScoreCommand}" CommandParameter="1"
+                                            Style="{StaticResource ActionButtonStyle}" Width="28" Height="26" FontSize="10"
+                                            Padding="0" Margin="0,0,2,2"/>
+                                    <Button Content="0" Command="{Binding Sedation.SetScoreCommand}" CommandParameter="0"
+                                            Style="{StaticResource ActionButtonStyle}" Width="28" Height="26" FontSize="10"
+                                            Padding="0"/>
+                                </WrapPanel>
+                                <Button Grid.Column="1" Content="记录" Command="{Binding Sedation.RecordAssessmentCommand}"
+                                        Style="{StaticResource PrimaryButtonStyle}" Padding="8,4" FontSize="10"
+                                        VerticalAlignment="Center"/>
+                            </Grid>
+
+                            <!-- Score display + history -->
+                            <Border Grid.Row="3" Background="#0A1220" Padding="8">
+                                <StackPanel>
+                                    <TextBlock FontSize="12" Foreground="{StaticResource AccentCyanBrush}">
+                                        <Run Text="{Binding Sedation.SelectedScaleType, StringFormat='{}{0}'}"/>
+                                        <Run Text=": "/>
+                                        <Run Text="{Binding Sedation.SelectedScore}" FontWeight="Bold"/>
+                                        <Run Text="  "/>
+                                        <Run Text="{Binding Sedation.SelectedScoreLabel}" FontSize="10"
+                                             Foreground="{StaticResource TextSecondaryBrush}"/>
+                                    </TextBlock>
+                                    <ScrollViewer MaxHeight="70" VerticalScrollBarVisibility="Auto" Margin="0,4,0,0">
+                                        <ItemsControl ItemsSource="{Binding Sedation.Records}">
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate>
+                                                    <TextBlock FontSize="10" Foreground="{StaticResource TextSecondaryBrush}">
+                                                        <Run Text="{Binding Timestamp, StringFormat=HH:mm:ss}"/>
+                                                        <Run Text="  "/>
+                                                        <Run Text="{Binding ScaleType}"/>
+                                                        <Run Text="="/>
+                                                        <Run Text="{Binding Score}" Foreground="{StaticResource AccentCyanBrush}"/>
+                                                    </TextBlock>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+                                    </ScrollViewer>
+                                </StackPanel>
+                            </Border>
+                        </Grid>
+                    </Border>
+
+                    <!-- 体位记录 -->
+                    <Border Grid.Column="2" Style="{StaticResource CardBorderStyle}" Padding="10" Margin="4,0,0,0">
+                        <Grid>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="*"/>
+                            </Grid.RowDefinitions>
+
+                            <Border Grid.Row="0" Style="{StaticResource SectionLabelStyle}" Margin="-10,0,-10,6">
+                                <TextBlock Text="体位记录" FontSize="11" FontWeight="Bold"
+                                           Foreground="{StaticResource TextSecondaryBrush}"/>
+                            </Border>
+
+                            <StackPanel Grid.Row="1">
+                                <TextBlock Text="{Binding Position.CurrentPositionLabel}" FontSize="16" FontWeight="Bold"
+                                           Foreground="{StaticResource GreenOkBrush}" Margin="0,4,0,6"/>
+
+                                <WrapPanel Margin="0,0,0,6">
+                                    <Button Content="仰卧" Command="{Binding Position.SetPositionCommand}"
+                                            CommandParameter="Supine" Style="{StaticResource ActionButtonStyle}"
+                                            Width="55" Height="28" FontSize="10" Padding="0" Margin="0,0,3,3"/>
+                                    <Button Content="俯卧" Command="{Binding Position.SetPositionCommand}"
+                                            CommandParameter="Prone" Style="{StaticResource ActionButtonStyle}"
+                                            Width="55" Height="28" FontSize="10" Padding="0" Margin="0,0,3,3"/>
+                                    <Button Content="左侧" Command="{Binding Position.SetPositionCommand}"
+                                            CommandParameter="LeftLateral" Style="{StaticResource ActionButtonStyle}"
+                                            Width="55" Height="28" FontSize="10" Padding="0" Margin="0,0,3,3"/>
+                                    <Button Content="右侧" Command="{Binding Position.SetPositionCommand}"
+                                            CommandParameter="RightLateral" Style="{StaticResource ActionButtonStyle}"
+                                            Width="55" Height="28" FontSize="10" Padding="0" Margin="0,0,3,3"/>
+                                    <Button Content="坐位" Command="{Binding Position.SetPositionCommand}"
+                                            CommandParameter="Sitting" Style="{StaticResource ActionButtonStyle}"
+                                            Width="55" Height="28" FontSize="10" Padding="0" Margin="0,0,3,3"/>
+                                    <Button Content="站立" Command="{Binding Position.SetPositionCommand}"
+                                            CommandParameter="Standing" Style="{StaticResource ActionButtonStyle}"
+                                            Width="55" Height="28" FontSize="10" Padding="0" Margin="0,0,3,3"/>
+                                </WrapPanel>
+
+                                <ScrollViewer MaxHeight="140" VerticalScrollBarVisibility="Auto">
+                                    <ItemsControl ItemsSource="{Binding Position.PositionRecords}">
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <TextBlock FontSize="10" Foreground="{StaticResource TextSecondaryBrush}" Margin="0,2">
+                                                    <Run Text="{Binding Timestamp, StringFormat=HH:mm:ss}"/>
+                                                    <Run Text="  "/>
+                                                    <Run Text="{Binding Position}" Foreground="{StaticResource AccentCyanBrush}"/>
+                                                </TextBlock>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                </ScrollViewer>
+                            </StackPanel>
+                        </Grid>
+                    </Border>
+                </Grid>
+
+                <!-- ── 第5行: 报告生成（底部，低频操作） ────────────────────── -->
+                <Border Style="{StaticResource CardBorderStyle}" Padding="10" Margin="0,0,0,12">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+
+                        <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                            <TextBlock Text="报告生成" FontSize="12" FontWeight="Bold"
+                                       Foreground="{StaticResource AccentCyanBrush}"/>
+                            <TextBlock Text="包含：睡眠统计、催眠图、用药·镇静·体位记录、血氧摘要"
+                                       FontSize="10" Foreground="{StaticResource TextSecondaryBrush}" Margin="0,2,0,0"/>
+                        </StackPanel>
+
+                        <StackPanel Grid.Column="1" Orientation="Horizontal" Margin="16,0" VerticalAlignment="Center">
+                            <CheckBox Content="含催眠图" IsChecked="{Binding Report.IncludeHypnogram}"
+                                      Foreground="{StaticResource TextPrimaryBrush}" FontSize="10" Margin="0,0,10,0"/>
+                            <TextBox Text="{Binding Report.OperatorNotes, UpdateSourceTrigger=PropertyChanged}"
+                                     Style="{StaticResource DarkTextBoxStyle}" Width="200" Tag="备注" FontSize="10"/>
+                        </StackPanel>
+
+                        <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                            <Button Content="预览" Command="{Binding Report.PreviewReportCommand}"
+                                    Style="{StaticResource ActionButtonStyle}" Padding="10,6" FontSize="10" Margin="0,0,6,0"/>
+                            <Button Content="保存 JSON" Command="{Binding Report.SaveReportJsonCommand}"
+                                    Style="{StaticResource PrimaryButtonStyle}" Padding="10,6" FontSize="10" Margin="0,0,6,0"/>
+                            <Button Content="保存 CSV" Command="{Binding Report.SaveReportCsvCommand}"
+                                    Style="{StaticResource PrimaryButtonStyle}" Padding="10,6" FontSize="10"/>
+                        </StackPanel>
+                    </Grid>
+                </Border>
+
+            </StackPanel>
+        </ScrollViewer>
+
+    </DockPanel>
+</Window>

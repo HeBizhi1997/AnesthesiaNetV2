@@ -1,0 +1,27 @@
+<Window x:Class="EEGMonitor.AnesthesiaSleep.Views.Dialogs.ReportPreviewDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="报告预览" Height="600" Width="800"
+        Background="{StaticResource BgDeepBrush}"
+        Foreground="{StaticResource TextPrimaryBrush}"
+        WindowStartupLocation="CenterOwner">
+
+    <DockPanel Background="{StaticResource BgDeepBrush}">
+        <Border DockPanel.Dock="Bottom" Background="#040810" BorderBrush="#182C46"
+                BorderThickness="0,1,0,0" Padding="12,8">
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                <Button Content="保存 JSON" Style="{StaticResource ActionButtonStyle}" Margin="0,0,8,0"/>
+                <Button Content="保存 CSV" Style="{StaticResource PrimaryButtonStyle}" Margin="0,0,8,0"/>
+                <Button Content="关闭" Style="{StaticResource ActionButtonStyle}" Click="Close_Click"/>
+            </StackPanel>
+        </Border>
+
+        <ScrollViewer VerticalScrollBarVisibility="Auto">
+            <TextBox x:Name="PreviewTextBox" IsReadOnly="True"
+                     Background="{StaticResource BgDeepBrush}"
+                     Foreground="{StaticResource TextPrimaryBrush}"
+                     FontFamily="Consolas" FontSize="11" BorderThickness="0"
+                     TextWrapping="Wrap" Margin="12"/>
+        </ScrollViewer>
+    </DockPanel>
+</Window>

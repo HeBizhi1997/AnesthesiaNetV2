@@ -1,0 +1,134 @@
+<UserControl x:Class="EEGMonitor.AnesthesiaSleep.Views.Controls.DrugAdministrationPanel"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             Background="{StaticResource BgPanelBrush}">
+
+    <Grid Margin="12">
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="280"/>
+            <ColumnDefinition Width="*"/>
+        </Grid.ColumnDefinitions>
+
+        <!-- 用药录入表单 -->
+        <Border Grid.Column="0" Style="{StaticResource CardBorderStyle}" Padding="12">
+            <StackPanel>
+                <TextBlock Text="用药记录" FontSize="13" FontWeight="Bold"
+                           Foreground="{StaticResource AccentCyanBrush}" Margin="0,0,0,10"/>
+
+                <TextBlock Text="药物名称" FontSize="11" Foreground="{StaticResource TextSecondaryBrush}" Margin="0,4,0,2"/>
+                <TextBox Text="{Binding DrugName, UpdateSourceTrigger=PropertyChanged}"
+                         Style="{StaticResource DarkTextBoxStyle}"/>
+
+                <Grid Margin="0,8,0,0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="80"/>
+                    </Grid.ColumnDefinitions>
+                    <StackPanel Grid.Column="0" Margin="0,0,4,0">
+                        <TextBlock Text="剂量" FontSize="11" Foreground="{StaticResource TextSecondaryBrush}"/>
+                        <TextBox Text="{Binding Dose, UpdateSourceTrigger=PropertyChanged}"
+                                 Style="{StaticResource DarkTextBoxStyle}"/>
+                    </StackPanel>
+                    <StackPanel Grid.Column="1">
+                        <TextBlock Text="单位" FontSize="11" Foreground="{StaticResource TextSecondaryBrush}"/>
+                        <ComboBox ItemsSource="{Binding DoseUnits}" SelectedItem="{Binding DoseUnit}"
+                                  Style="{StaticResource DarkComboStyle}"/>
+                    </StackPanel>
+                </Grid>
+
+                <TextBlock Text="给药途径" FontSize="11" Foreground="{StaticResource TextSecondaryBrush}" Margin="0,8,0,2"/>
+                <ComboBox ItemsSource="{Binding Routes}" SelectedItem="{Binding Route}"
+                          Style="{StaticResource DarkComboStyle}"/>
+
+                <Grid Margin="0,8,0,0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="80"/>
+                    </Grid.ColumnDefinitions>
+                    <StackPanel Grid.Column="0" Margin="0,0,4,0">
+                        <TextBlock Text="输注速率（可选）" FontSize="11"
+                                   Foreground="{StaticResource TextSecondaryBrush}"/>
+                        <TextBox Text="{Binding InfusionRate, UpdateSourceTrigger=PropertyChanged, TargetNullValue=''}"
+                                 Style="{StaticResource DarkTextBoxStyle}"/>
+                    </StackPanel>
+                    <StackPanel Grid.Column="1">
+                        <TextBlock Text="单位" FontSize="11" Foreground="{StaticResource TextSecondaryBrush}"/>
+                        <ComboBox ItemsSource="{Binding InfusionRateUnits}"
+                                  SelectedItem="{Binding InfusionRateUnit}"
+                                  Style="{StaticResource DarkComboStyle}"/>
+                    </StackPanel>
+                </Grid>
+
+                <TextBlock Text="备注" FontSize="11" Foreground="{StaticResource TextSecondaryBrush}" Margin="0,8,0,2"/>
+                <TextBox Text="{Binding DrugNotes, UpdateSourceTrigger=PropertyChanged}"
+                         Style="{StaticResource DarkTextBoxStyle}" Height="50" TextWrapping="Wrap"
+                         AcceptsReturn="True"/>
+
+                <Button Content="+ 添加用药记录" Margin="0,12,0,0"
+                        Command="{Binding AddDrugCommand}">
+                    <Button.Style>
+                        <Style TargetType="Button" BasedOn="{StaticResource ActionButtonStyle}">
+                            <Setter Property="Background" Value="#0A2A14"/>
+                            <Setter Property="Foreground" Value="{StaticResource GreenOkBrush}"/>
+                            <Setter Property="BorderBrush" Value="{StaticResource GreenOkBrush}"/>
+                        </Style>
+                    </Button.Style>
+                </Button>
+            </StackPanel>
+        </Border>
+
+        <!-- 用药时间线 -->
+        <Border Grid.Column="1" Style="{StaticResource CardBorderStyle}" Padding="12" Margin="8,0,0,0">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                </Grid.RowDefinitions>
+
+                <TextBlock Grid.Row="0" Text="用药时间线" FontSize="13" FontWeight="Bold"
+                           Foreground="{StaticResource AccentCyanBrush}" Margin="0,0,0,8"/>
+
+                <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+                    <ItemsControl ItemsSource="{Binding DrugRecords}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Border Background="#0C1422" Padding="8,6" Margin="0,2"
+                                        BorderBrush="#182C46" BorderThickness="0,0,0,1">
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="80"/>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Grid.Column="0"
+                                                   Text="{Binding AdministrationTime, StringFormat=HH:mm:ss}"
+                                                   FontSize="11" Foreground="{StaticResource TextSecondaryBrush}"
+                                                   VerticalAlignment="Center"/>
+                                        <StackPanel Grid.Column="1" Margin="8,0">
+                                            <TextBlock FontSize="12" FontWeight="SemiBold"
+                                                       Foreground="{StaticResource TextPrimaryBrush}">
+                                                <Run Text="{Binding DrugName}"/>
+                                                <Run Text=" "/>
+                                                <Run Text="{Binding Dose, StringFormat={}{0:F2}}"/>
+                                                <Run Text=" "/>
+                                                <Run Text="{Binding DoseUnit}" Foreground="{StaticResource TextSecondaryBrush}"/>
+                                            </TextBlock>
+                                            <TextBlock FontSize="10" Foreground="{StaticResource TextSecondaryBrush}">
+                                                <Run Text="{Binding Route}"/>
+                                                <Run Text="{Binding InfusionRate, StringFormat=' @ {0} ', TargetNullValue=''}"/>
+                                                <Run Text="{Binding InfusionRateUnit, TargetNullValue=''}"/>
+                                            </TextBlock>
+                                        </StackPanel>
+                                        <Button Grid.Column="2" Content="删" FontSize="10"
+                                                Style="{StaticResource DangerButtonStyle}" Padding="6,2"
+                                                CommandParameter="{Binding .}"/>
+                                    </Grid>
+                                </Border>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </ScrollViewer>
+            </Grid>
+        </Border>
+    </Grid>
+</UserControl>

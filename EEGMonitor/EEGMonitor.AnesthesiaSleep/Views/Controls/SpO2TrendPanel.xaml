@@ -1,0 +1,74 @@
+<UserControl x:Class="EEGMonitor.AnesthesiaSleep.Views.Controls.SpO2TrendPanel"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:oxy="http://oxyplot.org/wpf"
+             xmlns:conv="clr-namespace:EEGMonitor.AnesthesiaSleep.Views.Converters"
+             Background="{StaticResource BgPanelBrush}">
+
+    <Grid Margin="8">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+
+        <!-- 脱氧告警横幅 -->
+        <Border Grid.Row="0" Background="#2A0808" BorderBrush="{StaticResource RedCritBrush}" BorderThickness="1"
+                CornerRadius="3" Padding="12,4" Margin="0,0,0,6"
+                Visibility="{Binding HasSpO2Alert, Converter={StaticResource BoolToVis}}">
+            <TextBlock Text="{Binding Spo2AlertText, StringFormat='⚠ 脱氧告警: {0}'}"
+                       FontSize="12" FontWeight="SemiBold" Foreground="{StaticResource RedCritBrush}"/>
+        </Border>
+
+        <!-- SpO2 指标卡片 -->
+        <WrapPanel Grid.Row="1" Margin="0,0,0,8">
+            <Border Style="{StaticResource CardBorderStyle}" Width="160" Height="70" Margin="2">
+                <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
+                    <TextBlock Text="当前 SpO2" FontSize="10" Foreground="{StaticResource TextSecondaryBrush}"/>
+                    <TextBlock FontSize="24" FontWeight="Bold" VerticalAlignment="Center" HorizontalAlignment="Center">
+                        <Run Text="{Binding CurrentSpO2, StringFormat={}{0:F0}}"/>
+                        <Run Text="%" FontSize="14" Foreground="{StaticResource TextSecondaryBrush}"/>
+                    </TextBlock>
+                </StackPanel>
+            </Border>
+            <Border Style="{StaticResource CardBorderStyle}" Width="160" Height="70" Margin="2">
+                <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
+                    <TextBlock Text="平均 SpO2" FontSize="10" Foreground="{StaticResource TextSecondaryBrush}"/>
+                    <TextBlock Text="{Binding MeanSpO2, StringFormat={}{0:F0}%, Converter={StaticResource NaNConv}}"
+                               FontSize="18" FontWeight="Bold" Foreground="{StaticResource GreenOkBrush}"/>
+                </StackPanel>
+            </Border>
+            <Border Style="{StaticResource CardBorderStyle}" Width="160" Height="70" Margin="2">
+                <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
+                    <TextBlock Text="最低 SpO2" FontSize="10" Foreground="{StaticResource TextSecondaryBrush}"/>
+                    <TextBlock Text="{Binding MinSpO2, StringFormat={}{0:F0}%, Converter={StaticResource NaNConv}}"
+                               FontSize="18" FontWeight="Bold" Foreground="{StaticResource RedCritBrush}"/>
+                </StackPanel>
+            </Border>
+            <Border Style="{StaticResource CardBorderStyle}" Width="160" Height="70" Margin="2">
+                <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
+                    <TextBlock Text="ODI₃ (≥3%)" FontSize="10" Foreground="{StaticResource TextSecondaryBrush}"/>
+                    <TextBlock Text="{Binding Odi3, StringFormat={}{0:F1}/hr, Converter={StaticResource NaNConv}}"
+                               FontSize="18" FontWeight="Bold" Foreground="{StaticResource YellowWarnBrush}"/>
+                </StackPanel>
+            </Border>
+            <Border Style="{StaticResource CardBorderStyle}" Width="160" Height="70" Margin="2">
+                <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
+                    <TextBlock Text="ODI₄ (≥4%)" FontSize="10" Foreground="{StaticResource TextSecondaryBrush}"/>
+                    <TextBlock Text="{Binding Odi4, StringFormat={}{0:F1}/hr, Converter={StaticResource NaNConv}}"
+                               FontSize="18" FontWeight="Bold" Foreground="{StaticResource OrangeBrush}"/>
+                </StackPanel>
+            </Border>
+            <Border Style="{StaticResource CardBorderStyle}" Width="160" Height="70" Margin="2">
+                <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
+                    <TextBlock Text="T90 (SpO2&lt;90%)" FontSize="10" Foreground="{StaticResource TextSecondaryBrush}"/>
+                    <TextBlock Text="{Binding T90Percent, StringFormat={}{0:F0}%}"
+                               FontSize="18" FontWeight="Bold" Foreground="{StaticResource RedCritBrush}"/>
+                </StackPanel>
+            </Border>
+        </WrapPanel>
+
+        <!-- SpO2 趋势图 -->
+        <oxy:PlotView Grid.Row="2" Model="{Binding SpO2TrendModel}"/>
+    </Grid>
+</UserControl>

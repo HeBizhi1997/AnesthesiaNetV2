@@ -1,0 +1,84 @@
+<UserControl x:Class="EEGMonitor.AnesthesiaSleep.Views.Controls.ReportPanel"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             Background="{StaticResource BgPanelBrush}">
+
+    <Grid Margin="12">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <Border Grid.Row="0" Style="{StaticResource CardBorderStyle}" Padding="16" Margin="0,0,0,8">
+            <StackPanel>
+                <TextBlock Text="生成睡眠监测报告" FontSize="14" FontWeight="Bold"
+                           Foreground="{StaticResource AccentCyanBrush}" Margin="0,0,0,8"/>
+
+                <TextBlock Text="报告内容包括：睡眠统计数据、催眠图、用药记录、镇静评估、体位变更、脱氧事件及血氧汇总。"
+                           FontSize="11" Foreground="{StaticResource TextSecondaryBrush}" TextWrapping="Wrap"
+                           Margin="0,0,0,10"/>
+
+                <StackPanel Orientation="Horizontal" Margin="0,4">
+                    <CheckBox Content="包含催眠图数据" IsChecked="{Binding IncludeHypnogram}"
+                              Foreground="{StaticResource TextPrimaryBrush}" Margin="0,0,16,0"/>
+                    <CheckBox Content="包含原始脑电（文件较大）" IsChecked="{Binding IncludeRawEEG}"
+                              Foreground="{StaticResource TextPrimaryBrush}" Margin="0,0,16,0"/>
+                </StackPanel>
+
+                <TextBlock Text="备注" FontSize="11" Foreground="{StaticResource TextSecondaryBrush}"
+                           Margin="0,8,0,2"/>
+                <TextBox Text="{Binding OperatorNotes, UpdateSourceTrigger=PropertyChanged}"
+                         Style="{StaticResource DarkTextBoxStyle}" Height="60" TextWrapping="Wrap"
+                         AcceptsReturn="True"/>
+
+                <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
+                    <Button Content="预览 (JSON)" Command="{Binding PreviewReportCommand}"
+                            Style="{StaticResource ActionButtonStyle}" Margin="0,0,8,0"/>
+                    <Button Content="保存 JSON" Command="{Binding SaveReportJsonCommand}">
+                        <Button.Style>
+                            <Style TargetType="Button" BasedOn="{StaticResource ActionButtonStyle}">
+                                <Setter Property="Background" Value="#0A2A14"/>
+                                <Setter Property="Foreground" Value="{StaticResource GreenOkBrush}"/>
+                                <Setter Property="BorderBrush" Value="{StaticResource GreenOkBrush}"/>
+                            </Style>
+                        </Button.Style>
+                    </Button>
+                    <Button Content="保存 CSV" Command="{Binding SaveReportCsvCommand}">
+                        <Button.Style>
+                            <Style TargetType="Button" BasedOn="{StaticResource ActionButtonStyle}">
+                                <Setter Property="Background" Value="#0A2A14"/>
+                                <Setter Property="Foreground" Value="{StaticResource GreenOkBrush}"/>
+                                <Setter Property="BorderBrush" Value="{StaticResource GreenOkBrush}"/>
+                            </Style>
+                        </Button.Style>
+                    </Button>
+                </StackPanel>
+
+                <TextBlock Text="{Binding ReportStatus}" FontSize="11"
+                           Foreground="{StaticResource TextPrimaryBrush}" Margin="0,6,0,0"/>
+            </StackPanel>
+        </Border>
+
+        <!-- JSON 预览 -->
+        <Border Grid.Row="1" Style="{StaticResource CardBorderStyle}" Padding="8">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                </Grid.RowDefinitions>
+
+                <TextBlock Grid.Row="0" Text="预览" FontSize="11" FontWeight="Bold"
+                           Foreground="{StaticResource TextSecondaryBrush}" Margin="0,0,0,6"/>
+
+                <ScrollViewer Grid.Row="1" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto">
+                    <TextBox Text="{Binding PreviewText, Mode=OneWay}" IsReadOnly="True"
+                             Background="{StaticResource BgDeepBrush}"
+                             Foreground="{StaticResource TextPrimaryBrush}"
+                             FontFamily="Consolas" FontSize="11" BorderThickness="0"
+                             TextWrapping="NoWrap" IsReadOnlyCaretVisible="True"/>
+                </ScrollViewer>
+            </Grid>
+        </Border>
+    </Grid>
+</UserControl>

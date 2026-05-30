@@ -18,7 +18,10 @@ namespace EEGMonitor.Infrastructure.Pipeline;
 /// </summary>
 public sealed class DataPipeline : IAsyncDisposable
 {
-    private const int CHUNK_SIZE = 256; // 1 second @ 256 Hz
+    // Target one-second epochs. Derived from DeviceSampleRate so chunk duration stays
+    // 1 s across devices (NSM 200 Hz, ADS1299 250-2000 Hz) instead of a fixed 256-sample
+    // window that would be 0.5 s at 500 Hz. Bounded for safety.
+    private int ChunkSize => Math.Clamp(DeviceSampleRate, 64, 4096);
 
     private readonly ISerialPortService _serial;
     private readonly IEEGProcessingClient _processing;
@@ -183,13 +186,13 @@ public sealed class DataPipeline : IAsyncDisposable
     // Stage 1 – buffer individual samples into 1-second epoch chunks
     private async Task ChunkingStageAsync()
     {
-        var buffer = new List<EEGSample>(CHUNK_SIZE);
+        var buffer = new List<EEGSample>(512);
         try
         {
             await foreach (var sample in _rawChannel.Reader.ReadAllAsync(_cts.Token))
             {
                 buffer.Add(sample);
-                if (buffer.Count >= CHUNK_SIZE)
+                if (buffer.Count >= ChunkSize)
                 {
                     await _chunkChannel.Writer.WriteAsync(new EEGDataChunk
                     {

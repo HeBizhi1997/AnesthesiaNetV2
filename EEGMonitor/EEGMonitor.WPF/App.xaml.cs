@@ -24,18 +24,33 @@ public partial class App : Application
         base.OnStartup(e);
 
         SerilogSetup.Configure();
+        RegisterGlobalExceptionHandlers();
 
-        _host = Host.CreateDefaultBuilder()
-            .UseSerilog()
-            .ConfigureServices(ConfigureServices)
-            .Build();
+        try
+        {
+            _host = Host.CreateDefaultBuilder()
+                .UseSerilog()
+                .ConfigureServices(ConfigureServices)
+                .Build();
 
-        _host.Start();
+            _host.Start();
 
-        var vm = _host.Services.GetRequiredService<MainViewModel>();
-        var mainWindow = _host.Services.GetRequiredService<Views.MainWindow>();
-        mainWindow.DataContext = vm;
-        mainWindow.Show();
+            var vm = _host.Services.GetRequiredService<MainViewModel>();
+            var mainWindow = _host.Services.GetRequiredService<Views.MainWindow>();
+            mainWindow.DataContext = vm;
+            mainWindow.Show();
+        }
+        catch (Exception ex)
+        {
+            // Startup failures (DI resolution, XAML InitializeComponent, host build) would
+            // otherwise terminate the process with no visible cause. Log + surface it.
+            Log.Fatal(ex, "Fatal exception during application startup");
+            MessageBox.Show(
+                $"程序启动失败：\n\n{ex.GetType().Name}: {ex.Message}\n\n详见日志: %LOCALAPPDATA%\\EEGMonitor\\Logs",
+                "EEGMonitor 启动异常", MessageBoxButton.OK, MessageBoxImage.Error);
+            Shutdown(1);
+            return;
+        }
 
         Log.Information("EEGMonitor application started");
 
@@ -47,6 +62,33 @@ public partial class App : Application
             if (!ok)
                 Log.Warning("EEG processing service could not be started automatically – start main.py manually");
         });
+    }
+
+    /// <summary>
+    /// Capture every unhandled-exception channel so failures are logged with a full stack
+    /// trace instead of silently terminating the process. UI-thread exceptions are kept
+    /// non-fatal (Handled=true) so a single bad render/event doesn't close the whole app.
+    /// </summary>
+    private void RegisterGlobalExceptionHandlers()
+    {
+        DispatcherUnhandledException += (_, args) =>
+        {
+            Log.Error(args.Exception, "Unhandled UI (Dispatcher) exception");
+            MessageBox.Show(
+                $"发生未处理异常（已记录日志，程序继续运行）：\n\n{args.Exception.GetType().Name}: {args.Exception.Message}",
+                "EEGMonitor", MessageBoxButton.OK, MessageBoxImage.Warning);
+            args.Handled = true;
+        };
+
+        AppDomain.CurrentDomain.UnhandledException += (_, args) =>
+            Log.Fatal(args.ExceptionObject as Exception,
+                "Unhandled AppDomain exception (terminating={Terminating})", args.IsTerminating);
+
+        System.Threading.Tasks.TaskScheduler.UnobservedTaskException += (_, args) =>
+        {
+            Log.Error(args.Exception, "Unobserved background task exception");
+            args.SetObserved();
+        };
     }
 
     private static void ConfigureServices(IServiceCollection services)

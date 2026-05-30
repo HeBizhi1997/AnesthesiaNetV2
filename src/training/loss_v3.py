@@ -164,6 +164,8 @@ class MultiTaskLossV3(nn.Module):
         transition_boost:     float = 2.0,   # 高 velocity 时步放大
         vel_threshold:        float = 0.2,   # ce_velocity 过渡期阈值
         huber_delta:          float = 0.05,  # 理论 §2.6：δ=5 BIS pts（归一化空间 0.05）
+        bis_transition_weight: float = 1.0,  # v14: 过渡区 L_bis 权重放大（>1 启用），打击诱导/复苏 2× 误差
+        bis_transition_dbis:   float = 0.02, # v14: |Δlabel/步| 阈值（0.02≈2 BIS/s），超过即过渡区
         focal_gamma:          float = 2.0,
         focal_alpha:          float = 0.5,    # v8 validated; 0.99→9801:1 gradient ratio (broken)
         stim_pos_weight:      float = 15.0,   # v8 validated; 99→9801:1 gradient ratio (broken)
@@ -188,6 +190,8 @@ class MultiTaskLossV3(nn.Module):
         self.transition_boost     = transition_boost
         self.vel_threshold        = vel_threshold
         self.huber_delta          = huber_delta
+        self.bis_transition_weight = bis_transition_weight
+        self.bis_transition_dbis   = bis_transition_dbis
         self.focal_gamma          = focal_gamma
         self.focal_alpha          = focal_alpha
         self.stim_pos_weight      = stim_pos_weight
@@ -240,13 +244,21 @@ class MultiTaskLossV3(nn.Module):
         B, T = label_bis.shape
         cur_phase = self.get_curriculum_phase(epoch)
 
-        # ── 1. L_bis：SQI 遮掩 Huber ─────────────────────────────────────────
+        # ── 1. L_bis：SQI 遮掩 + 过渡区加权 Huber ──────────────────────────────
+        # 逐元素 Huber，权重 = SQI掩码 ×（过渡区放大）。
+        # 过渡区由标签自身斜率 |Δlabel| 定义（不依赖常缺失的药物数据），
+        # 直接针对 v13 诊断的诱导/复苏高误差区（vInd/vRec ~9-10 = 整体 2×）。
         sqi_ok  = (sqi_mean > 0.5).float()
         pred_sq = pred_bis.squeeze(-1)
-        bis_err = F.huber_loss(
-            pred_sq * sqi_ok, label_bis * sqi_ok,
-            delta=self.huber_delta, reduction="sum",
-        ) / (sqi_ok.sum() + 1e-6)
+        huber_el = F.huber_loss(
+            pred_sq, label_bis, delta=self.huber_delta, reduction="none")  # (B, T)
+        w_bis = sqi_ok
+        if self.bis_transition_weight > 1.0 and T > 1:
+            dlabel = torch.zeros_like(label_bis)
+            dlabel[:, 1:] = (label_bis[:, 1:] - label_bis[:, :-1]).abs()
+            is_trans = (dlabel > self.bis_transition_dbis).float()
+            w_bis = w_bis * (1.0 + (self.bis_transition_weight - 1.0) * is_trans)
+        bis_err = (huber_el * w_bis).sum() / (w_bis.sum() + 1e-6)
 
         # ── 2. L_phase：加权交叉熵 ───────────────────────────────────────────
         ph_logits_flat = phase_logits.view(B * T, -1)

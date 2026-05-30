@@ -1,8 +1,34 @@
 import numpy as np
 from scipy import signal
-from scipy.signal import butter, sosfiltfilt, iirnotch, filtfilt, welch, detrend
+from scipy.signal import (butter, sosfiltfilt, iirnotch, filtfilt, welch, detrend,
+                          sosfilt, sosfilt_zi, tf2sos)
 from scipy.ndimage import uniform_filter1d
 from loguru import logger
+
+
+class _StreamSOS:
+    """
+    Stateful causal SOS filter for gap-free streaming. Carries the filter delay state (zi)
+    across successive chunks so concatenated output is continuous (no per-chunk edge
+    transients). Initialised to the steady state for the first sample to avoid a startup
+    step from a large DC offset.
+    """
+
+    def __init__(self, sos):
+        self._sos = sos
+        self._zi = None
+
+    def reset(self):
+        self._zi = None
+
+    def __call__(self, x):
+        x = np.asarray(x, dtype=np.float64)
+        if x.size == 0:
+            return x
+        if self._zi is None:
+            self._zi = sosfilt_zi(self._sos) * x[0]
+        y, self._zi = sosfilt(self._sos, x, zi=self._zi)
+        return y
 
 
 class EEGPreprocessor:
@@ -37,10 +63,56 @@ class EEGPreprocessor:
     # Seconds of filtered EEG to buffer for stable Welch PSD (4s matches BIS buffer)
     PSD_BUFFER_SEC = 4.0
 
+    # Eye-blink rejection — applied to ENERGY estimates only (band-power ratios + DSA).
+    # Blinks are large, slow (<~5 Hz) ocular transients that dump huge energy into the
+    # delta band and dominate the band-power ratio (δ can read 80%+ while the patient is
+    # plainly awake). We detect them on the low-frequency component via a robust MAD
+    # threshold and interpolate them out before the PSD. Raw + per-band display waveforms
+    # are NOT touched (the user wants blinks visible there).
+    BLINK_LP_HZ    = 5.0    # detect on the <5 Hz component (where blinks live)
+    BLINK_K        = 4.0    # core = |lf| > K · robust-σ (1.4826·MAD)
+    BLINK_PAD_S    = 0.15   # dilate each detected core ±150 ms (blink waveform is wider than its peak)
+    BLINK_MAX_FRAC = 0.50   # if >50% flagged it's a sustained slow-wave state, not blinks → keep as-is
+
     def __init__(self, sample_rate: int = 128):
         self._fs = sample_rate
         self._psd_buffer: list[float] = []   # rolling buffer for stable PSD
         self._psd_buffer_max = int(sample_rate * self.PSD_BUFFER_SEC)
+        # Stateful CAUSAL streaming filters for the display waveforms. The client streams
+        # 1-second chunks; filtering each chunk independently (zero-phase filtfilt) produces
+        # edge transients + visible discontinuities at every boundary. A causal filter that
+        # carries its state across chunks is perfectly continuous (textbook real-time EEG).
+        self._build_stream_filters()
+
+    def _build_stream_filters(self):
+        """(Re)build the causal streaming filter chain for the current sample rate."""
+        nyq = self._fs / 2.0
+        hp = butter(4, max(0.5, 0.01) / nyq, btype="high", output="sos")
+        lp = butter(4, min(47.0, nyq * 0.99) / nyq, btype="low", output="sos")
+        nb, na = iirnotch(50.0 / nyq, 30.0) if 50.0 < nyq else (None, None)
+        sections = [hp]
+        if nb is not None:
+            # Cascade the 50 Hz notch 3× : a single causal Q=30 biquad only knocks ~9 dB off
+            # the mains, leaving ~8% residual on the ADS1299 raw stream (which is ~99% 50 Hz).
+            # Three causal passes ≈ the depth of a zero-phase filtfilt notch (−21 dB / 0.8%
+            # residual) without introducing non-causal latency. Matches the vendor app's
+            # "EEG 滤波器" cleanliness on the same hardware.
+            nsos = tf2sos(nb, na)
+            sections.extend([nsos, nsos, nsos])
+        sections.append(lp)
+        self._sf_broad = _StreamSOS(np.vstack(sections))
+        # Per-band streaming bandpass (on the broadband output). γ tightened to 30–45 Hz to
+        # avoid the 47 Hz broadband edge + 50 Hz mains shoulder that otherwise show as noise.
+        disp_bands = dict(self.BANDS)
+        disp_bands["gamma"] = (30.0, 45.0)
+        self._sf_bands = {}
+        for band, (lo, hi) in disp_bands.items():
+            hic = min(hi, nyq * 0.99)
+            if lo >= hic:
+                self._sf_bands[band] = None
+                continue
+            self._sf_bands[band] = _StreamSOS(
+                butter(4, [lo / nyq, hic / nyq], btype="bandpass", output="sos"))
 
     @property
     def fs(self) -> int:
@@ -52,6 +124,7 @@ class EEGPreprocessor:
             self._fs = value
             self._psd_buffer_max = int(value * self.PSD_BUFFER_SEC)
             self._psd_buffer.clear()  # buffer was accumulated at old rate
+            self._build_stream_filters()
 
     # ── Public entry point ────────────────────────────────────────────────────
 
@@ -64,37 +137,38 @@ class EEGPreprocessor:
         Returns a dict ready to be JSON-serialised for the C# frontend.
         """
         n_samples, n_channels = eeg_data.shape
-        if n_samples < 64:
+        if n_samples < 32:
             return self._empty_result()
 
-        raw_ch = eeg_data[:, 0].copy().astype(np.float64)
+        chunk = eeg_data[:, 0].copy().astype(np.float64)
+        chunk_len = len(chunk)
 
         # 0. Hardware diagnostics BEFORE any processing – detect issues at the source
-        hw_diag = self._hardware_diagnostics(raw_ch)
+        hw_diag = self._hardware_diagnostics(chunk)
 
-        # 1. Explicit DC removal + linear detrend before any filtering.
-        #    Without this step, DC offset and slow baseline drift (common in
-        #    signed-byte ADC data from NSM devices) produce filter transients
-        #    in the 0.5 Hz highpass that leak into the delta band, causing
-        #    an artificially high delta power ratio.
-        raw_ch = raw_ch - raw_ch.mean()
-        raw_ch = detrend(raw_ch, type='linear')
+        # 1. Causal streaming filter: broadband (0.5–47 Hz + 50 Hz notch) with state carried
+        #    across chunks → continuous, no per-chunk edge transients/discontinuities.
+        filtered = self._sf_broad(chunk)            # (chunk_len,) continuous broadband EEG
 
-        # 2. Broadband filter: 0.5–47 Hz bandpass + 50 Hz notch
-        filtered = self._bandpass(raw_ch, 0.5, 47.0)
-        filtered = self._notch(filtered, 50.0)
+        # 2. Per-band display waveforms from the broadband stream (each band keeps its state).
+        waves = {}
+        for band in self.BANDS:
+            sf = self._sf_bands.get(band)
+            waves[band] = sf(filtered) if sf is not None else np.zeros_like(filtered)
 
-        # 3. Extract per-band waveforms by narrow bandpass on the broadband signal
-        waves = {band: self._bandpass(filtered, lo, hi)
-                 for band, (lo, hi) in self.BANDS.items()}
+        raw_ch = chunk - chunk.mean()   # raw_eeg output: this chunk, DC-removed for display
 
-        # 4. Band power ratios (Welch PSD, relative to 5-band total)
-        powers = self._band_powers(filtered)
+        # Blink-rejected copy for ENERGY estimates ONLY (band-power ratios + DSA). The raw
+        # waveform and the per-band display waveforms above keep their blinks untouched.
+        filtered_for_power, blink_frac = self._deblink_for_power(filtered)
 
-        # 5. DSA spectrogram
-        freqs, times, dsa_db = self._dsa(filtered)
+        # 5. Band power ratios (Welch PSD on the rolling buffer — already stable)
+        powers = self._band_powers(filtered_for_power)
 
-        # 6. Signal quality index (now aware of NSM ±127 µV clipping)
+        # 6. DSA spectrogram (newest chunk)
+        freqs, times, dsa_db = self._dsa(filtered_for_power)
+
+        # 7. Signal quality index (now aware of NSM ±127 µV clipping)
         sqi = self._sqi(raw_ch, filtered, hw_diag)
 
         amplitude_uv, dominant_hz, tonal_ratio = self._signal_diagnostics(filtered)
@@ -203,6 +277,44 @@ class EEGPreprocessor:
 
     # ── Spectral analysis ─────────────────────────────────────────────────────
 
+    def _deblink_for_power(self, x: np.ndarray) -> tuple[np.ndarray, float]:
+        """
+        Detect eye-blink transients and interpolate them out — for band-power / DSA
+        energy estimates ONLY (never for the raw or per-band display waveforms).
+
+        Method (single frontal channel, no separate EOG):
+          1. Isolate the <5 Hz component (zero-phase LP) — blinks are slow & large there.
+          2. Robust threshold: core = |lf − median| > K·(1.4826·MAD). MAD is dominated by
+             the sparse non-blink background, so a real blink stands out while a uniformly
+             high-amplitude slow-wave state does NOT (its MAD is large → threshold high).
+          3. Dilate each core ±BLINK_PAD_S to cover the full blink waveform.
+          4. Linearly interpolate the flagged samples from the clean neighbours.
+
+        Returns (cleaned_signal, blink_fraction). Falls back to the original signal when
+        there is nothing to do or when >BLINK_MAX_FRAC is flagged (sustained slow waves).
+        """
+        n = len(x)
+        if n < self.fs // 2:
+            return x, 0.0
+        nyq = self.fs / 2.0
+        lp = butter(2, min(self.BLINK_LP_HZ, nyq * 0.9) / nyq, btype="low", output="sos")
+        lf = sosfiltfilt(lp, x)
+        med = np.median(lf)
+        rstd = 1.4826 * (np.median(np.abs(lf - med)) + 1e-9)
+        core = np.abs(lf - med) > self.BLINK_K * rstd
+        frac = float(core.mean())
+        if frac == 0.0 or frac > self.BLINK_MAX_FRAC:
+            return x, frac
+        win = int(self.BLINK_PAD_S * self.fs) * 2 + 1
+        mask = np.convolve(core.astype(np.float64), np.ones(win), mode="same") > 0.5
+        good = ~mask
+        if mask.all() or good.sum() < max(8, int(0.3 * n)):
+            return x, frac
+        idx = np.arange(n)
+        y = x.copy()
+        y[mask] = np.interp(idx[mask], idx[good], x[good])
+        return y, float(mask.mean())
+
     def _band_powers(self, eeg: np.ndarray) -> dict:
         """
         Relative band powers summing to 1.0 across the 5 defined bands.
@@ -243,8 +355,12 @@ class EEGPreprocessor:
         return {k: v / total for k, v in raw_powers.items()}
 
     def reset(self):
-        """Clear the PSD rolling buffer (call at session start)."""
+        """Clear rolling buffers + streaming filter state (call at session start)."""
         self._psd_buffer.clear()
+        self._sf_broad.reset()
+        for sf in self._sf_bands.values():
+            if sf is not None:
+                sf.reset()
 
     def _dsa(self, eeg: np.ndarray,
              nperseg: int = 128,
@@ -302,12 +418,21 @@ class EEGPreprocessor:
 
         nperseg = min(self.fs, len(raw))
         f, pxx = welch(raw, fs=self.fs, nperseg=nperseg)
-        total_power = float(pxx.sum()) + 1e-12
 
-        # HF noise: power > 47 Hz in raw signal (EMG/ESU)
+        # Exclude power-line noise (50 Hz mains + 100 Hz harmonic, ±2 Hz) from the quality
+        # reference. The pipeline notches the mains out, so it must NOT count as 'HF noise'
+        # or skew the tonal/total reference. Without this, the raw signal — typically ~95%+
+        # 50 Hz on this hardware — pins the HF score at its 0.25 floor and caps SQI near 25%
+        # no matter how clean the actual EEG is. Genuine EMG (52–98, 102–125 Hz) still counts.
+        mains_mask = np.zeros_like(f, dtype=bool)
+        for mf in (50.0, 100.0):
+            mains_mask |= (f >= mf - 2.0) & (f <= mf + 2.0)
+        total_power = float(pxx[~mains_mask].sum()) + 1e-12
+
+        # HF noise: power > 47 Hz (EMG/ESU), excluding the line harmonics above.
         nyq = self.fs / 2.0
         if nyq > 50:
-            hf_ratio = float(pxx[f > 47.0].sum() / total_power)
+            hf_ratio = float(pxx[(f > 47.0) & ~mains_mask].sum() / total_power)
             hf_score = float(np.clip(1.0 - hf_ratio * 1.5, 0.25, 1.0))
         else:
             hf_score = 1.0
@@ -412,17 +537,16 @@ class EEGPreprocessor:
         # Saturation: >10% of samples at rail → signal is severely distorted
         is_saturated = clipping_pct > 10.0
 
+        # Only warn on real ADC clipping. A large DC offset by itself is NOT a fault on
+        # this hardware (the electrode half-cell potential is routinely thousands of µV and
+        # is removed by the 0.5 Hz highpass) — it only matters if it pushes the input into
+        # the rail, which clipping already captures. The DC value is still returned below
+        # for diagnostics, just not logged every chunk.
         if clipping_pct > 5.0:
             logger.warning(
                 f"HW: signal clipping detected — {clipping_pct:.0f}% of samples near "
-                f"±{adc_rail:.0f} µV rail (min={raw_min:.1f} max={raw_max:.1f} std={raw_std:.1f}). "
-                f"Band power estimates will be UNRELIABLE."
-            )
-
-        if abs(dc_offset) > 50.0:
-            logger.warning(
-                f"HW: large DC offset ({dc_offset:.1f} µV) — check electrode contact "
-                f"and ADC calibration."
+                f"±{adc_rail:.0f} µV rail (min={raw_min:.1f} max={raw_max:.1f} std={raw_std:.1f}, "
+                f"dc={dc_offset:.0f} µV). Band power estimates will be UNRELIABLE."
             )
 
         return {

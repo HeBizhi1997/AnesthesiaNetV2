@@ -47,8 +47,8 @@ public partial class MainViewModel : BaseViewModel
     [ObservableProperty] private string _statusMessage = "Ready";
     [ObservableProperty] private string _eegDiagnostics = "";
     [ObservableProperty] private ObservableCollection<string> _availablePorts = new();
-    [ObservableProperty] private string _selectedPort = "COM3";
-    [ObservableProperty] private int _selectedBaudRate = 115200;
+    [ObservableProperty] private string _selectedPort = "COM6";   // ADS1299 2026-05 board (CP210x)
+    [ObservableProperty] private int _selectedBaudRate = 230400;   // ADS1299 2026-05 board default
     [ObservableProperty] private List<int> _baudRates = new() { 9600, 57600, 115200, 230400, 460800, 921600 };
     [ObservableProperty] private int _channelCount = 2;
 
@@ -325,12 +325,14 @@ public partial class MainViewModel : BaseViewModel
         }
         else
         {
-            var ok = _serial.Connect(SelectedPort, SelectedBaudRate, ChannelCount);
+            // ADS1299 (2026-05 board): ~250 Hz/ch fixed; keep CH1 (board streams 8ch interleaved).
+            var ok = _serial.Connect(SelectedPort, SelectedBaudRate, channelCount: 1, sampleRate: 250);
             if (ok)
             {
                 IsConnected = true;
+                _pipeline.DeviceSampleRate = _serial.SampleRate;   // was left at 256 (bug)
                 _pipeline.Start();
-                StatusMessage = $"Connected: {SelectedPort}";
+                StatusMessage = $"Connected: {SelectedPort} @ {_serial.SampleRate}Hz";
             }
             else
             {
@@ -495,7 +497,9 @@ public partial class MainViewModel : BaseViewModel
 
     private void OnRawChunkAvailable(double[] rawData)
     {
-        RunOnUI(() => AppendWaveChart(RawEEGModel, _rawBuf, rawData));
+        // No longer plots the EEG chart — the EEG trace is driven by the Python service's
+        // preprocessed FilteredEEG (see OnResultAvailable) so it matches the band charts and
+        // is mains-free + continuous. Kept as a hook in case a fast raw view is wanted later.
     }
 
     private void OnResultAvailable(ProcessedEEGResult result)
@@ -539,11 +543,11 @@ public partial class MainViewModel : BaseViewModel
                     warnings.Append($"⚠ 信号近饱和 ({result.HwClippingPct:F0}%近轨) · 可能有削顶失真");
                 }
 
-                if (Math.Abs(result.HwDcOffsetUv) > 50.0)
-                {
-                    if (warnings.Length > 0) warnings.Append("  |  ");
-                    warnings.Append($"⚠ DC偏置 {result.HwDcOffsetUv:F0}µV · 检查电极/ADC校准");
-                }
+                // DC offset alone is NOT alarmed: on this ADS1299 board the raw electrode
+                // half-cell potential routinely sits at thousands of µV, yet the 0.5 Hz
+                // highpass removes it entirely and the EEG is unaffected. A DC issue only
+                // matters when it drives the input into the ADC rail — which is already
+                // reported by the HwIsSaturated alarm above. So no standalone DC alarm.
 
                 // Device/pipeline cross-validation
                 if (result.DeviceDeltaDiscrepancy > 0.30)
@@ -617,7 +621,9 @@ public partial class MainViewModel : BaseViewModel
             BetaPower = result.BetaPower * 100;
             GammaPower = result.GammaPower * 100;
 
-            // Charts (Raw EEG not displayed – skip its buffer to save CPU)
+            // EEG waveform = Python service's preprocessed signal (causal continuous filter,
+            // mains-notched), so the EEG trace matches the band charts and is artefact-free.
+            AppendWaveChart(RawEEGModel, _rawBuf, result.FilteredEEG);
             AppendWaveChart(DeltaModel,  _deltaBuf, result.DeltaWave);
             AppendWaveChart(ThetaModel,  _thetaBuf, result.ThetaWave);
             AppendWaveChart(AlphaModel,  _alphaBuf, result.AlphaWave);
@@ -821,8 +827,11 @@ public partial class MainViewModel : BaseViewModel
             TitleColor = OxyColor.FromRgb(0x8B, 0x94, 0x9E),
             IsZoomEnabled = false, IsPanEnabled = false,
         };
-        if (!double.IsNaN(yMin)) { yAxis.Minimum = yMin; yAxis.AbsoluteMinimum = yMin; }
-        if (!double.IsNaN(yMax)) { yAxis.Maximum = yMax; yAxis.AbsoluteMaximum = yMax; }
+        // Initial range only — NO AbsoluteMinimum/Maximum: the Y axis auto-scales to the
+        // signal at runtime (AutoScaleY in AppendWaveChart). Hard caps caused off-screen
+        // traces when the device amplitude/units differ from the assumed µV range.
+        if (!double.IsNaN(yMin)) yAxis.Minimum = yMin;
+        if (!double.IsNaN(yMax)) yAxis.Maximum = yMax;
         m.Axes.Add(yAxis);
         m.Series.Add(new LineSeries
         {
@@ -982,7 +991,53 @@ public partial class MainViewModel : BaseViewModel
                 series.Points.Add(new DataPoint(i, bufList[i]));
         }
 
-        model.InvalidatePlot(false);   // data-only update, skip axes recalculation
+        bool axisChanged = AutoScaleY(model, bufList);   // adapt Y range to the signal
+        // When the axis range moved, force a full invalidate so OxyPlot re-resolves the
+        // axis transform; otherwise a data-only invalidate can leave the trace off-screen.
+        model.InvalidatePlot(axisChanged);
+    }
+
+    /// <summary>
+    /// Robust, EMA-smoothed Y-axis auto-scaling for the waveform charts.
+    ///
+    /// Centers on the median (handles large DC offsets, e.g. raw ADS1299 counts) and
+    /// scales to the 2nd–98th percentile span (rejects transient spikes/artefacts) with
+    /// 30% headroom. The axis is eased toward the target (α=0.2) so it stays readable
+    /// instead of jittering every update; it snaps immediately when the trace is fully
+    /// off the current view (e.g. on connect or a unit/scale change).
+    /// </summary>
+    /// <returns>true if the Y-axis Min/Max changed materially (caller should full-invalidate).</returns>
+    private static bool AutoScaleY(PlotModel model, IReadOnlyList<double> data)
+    {
+        if (data.Count < 8) return false;
+        if (model.Axes.FirstOrDefault(a => a.Position == AxisPosition.Left) is not LinearAxis y)
+            return false;
+
+        var s = data.ToArray();
+        Array.Sort(s);
+        double med = s[s.Length / 2];
+        // 0.5th / 99.5th percentile: keep ~99% of the waveform, reject only true
+        // artefacts/spikes; 25% headroom so normal peaks never touch the frame edge.
+        double lo  = s[(int)(s.Length * 0.005)];
+        double hi  = s[Math.Min(s.Length - 1, (int)(s.Length * 0.995))];
+        double half = Math.Max(Math.Max(hi - med, med - lo), 1e-6) * 1.25;
+        double tMin = med - half, tMax = med + half;
+
+        double curMin = y.Minimum, curMax = y.Maximum;
+        bool needSnap = double.IsNaN(curMin) || double.IsNaN(curMax)
+                        || hi > curMax || lo < curMin                    // trace clipped
+                        || (curMax - curMin) > 6.0 * half                // view far too wide
+                        || (curMax - curMin) < 0.5 * half;               // view far too tight
+        double a = needSnap ? 1.0 : 0.2;
+        double newMin = double.IsNaN(curMin) ? tMin : curMin + (tMin - curMin) * a;
+        double newMax = double.IsNaN(curMax) ? tMax : curMax + (tMax - curMax) * a;
+        double span = Math.Max(newMax - newMin, 1e-9);
+        bool changed = double.IsNaN(curMin) || double.IsNaN(curMax)
+                       || Math.Abs(newMin - curMin) > 0.01 * span
+                       || Math.Abs(newMax - curMax) > 0.01 * span;
+        y.Minimum = newMin;
+        y.Maximum = newMax;
+        return changed;
     }
 
     public void ClearAllCharts()

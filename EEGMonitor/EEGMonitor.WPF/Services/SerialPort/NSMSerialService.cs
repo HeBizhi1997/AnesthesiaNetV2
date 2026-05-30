@@ -61,6 +61,9 @@ public sealed class NSMSerialService : ISerialPortService
     public int DetectedSampleRate =>
         _rateLocked ? _detectedSampleRate : _sampleRate;
 
+    /// <summary>ISerialPortService.SampleRate — exposes the auto-detected NSM rate.</summary>
+    public int SampleRate => DetectedSampleRate;
+
     public event Action<EEGSample>? SampleReceived;
     public event Action<NSMDataPacket>? NSMDataReceived;
     public event Action<string>? ConnectionStatusChanged;

@@ -106,10 +106,10 @@ public partial class ShellViewModel : ObservableObject
     [ObservableProperty] private bool _isServiceOnline;
     [ObservableProperty] private string _statusMessage = "就绪";
     [ObservableProperty] private ObservableCollection<string> _availablePorts = new();
-    [ObservableProperty] private string _selectedPort = "COM3";
-    [ObservableProperty] private int _selectedBaudRate = 115200;
+    [ObservableProperty] private string _selectedPort = "COM6";   // ADS1299 2026-05 board (CP210x)
+    [ObservableProperty] private int _selectedBaudRate = 230400;   // ADS1299 2026-05 board default
     [ObservableProperty] private List<int> _baudRates = new() { 9600, 57600, 115200, 230400, 460800, 921600 };
-    [ObservableProperty] private int _channelCount = 2;
+    [ObservableProperty] private int _channelCount = 1;            // 2026-05 board is single-channel
 
     [ObservableProperty] private DeviceType _selectedDeviceType = DeviceType.ADS1299;
     partial void OnSelectedDeviceTypeChanged(DeviceType value) => OnPropertyChanged(nameof(NsmSampleRateVisible));
@@ -331,12 +331,14 @@ public partial class ShellViewModel : ObservableObject
         }
         else
         {
-            var ok = _serial.Connect(SelectedPort, SelectedBaudRate, ChannelCount);
+            // ADS1299 (2026-05 board): ~250 Hz/ch fixed;取 CH1（板子实际 8ch 交织，已 de-interleave）。
+            var ok = _serial.Connect(SelectedPort, SelectedBaudRate, channelCount: 1, sampleRate: 250);
             if (ok)
             {
                 IsConnected = true;
+                _pipeline.DeviceSampleRate = _serial.SampleRate;   // was left at 256 (bug)
                 _pipeline.Start();
-                StatusMessage = $"已连接: {SelectedPort}";
+                StatusMessage = $"已连接: {SelectedPort} @ {_serial.SampleRate}Hz 差分";
             }
             else StatusMessage = "连接失败";
         }

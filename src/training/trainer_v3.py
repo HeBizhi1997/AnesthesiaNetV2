@@ -102,6 +102,51 @@ def _causal_rolling_mean(arr: np.ndarray, window: int = 15) -> np.ndarray:
     return (cs[idx + 1] - cs[start]) / (idx - start + 1)
 
 
+class ModelEMA:
+    """
+    模型权重指数滑动平均（SWA/EMA，v14）。
+
+    v13 诊断：原始 val_mae 逐 epoch 抖动 ±1.5 BIS，按原始 val_mae 选 checkpoint
+    挑中的是噪声峰（"4.57" 实为最幸运一帧，EMA≈5.3 才是真值）。
+    权重 EMA 把训练后期的振荡平均成稳定解 —— 用 EMA 权重做验证/选点/上报，
+    既消除抖动，又往往拿到优于原始最优的真实泛化 MAE。
+
+    EMA 覆盖所有浮点 state_dict 项（含 BatchNorm/GroupNorm 的 running buffers）；
+    非浮点项（如 num_batches_tracked）在 apply 时直接由当前模型复制。
+    """
+
+    def __init__(self, model: nn.Module, decay: float = 0.999):
+        self.decay = decay
+        self.shadow = {
+            k: v.detach().clone().float()
+            for k, v in model.state_dict().items()
+            if v.dtype.is_floating_point
+        }
+        self._backup: Optional[Dict[str, torch.Tensor]] = None
+
+    @torch.no_grad()
+    def update(self, model: nn.Module) -> None:
+        d = self.decay
+        for k, v in model.state_dict().items():
+            if k in self.shadow:
+                self.shadow[k].mul_(d).add_(v.detach().float(), alpha=1.0 - d)
+
+    @torch.no_grad()
+    def store_and_apply(self, model: nn.Module) -> None:
+        """备份当前权重并把 EMA 权重载入模型（验证/保存前调用）。"""
+        self._backup = {k: v.detach().clone() for k, v in model.state_dict().items()}
+        msd = model.state_dict()
+        for k, shadow_v in self.shadow.items():
+            msd[k].copy_(shadow_v.to(msd[k].dtype))
+
+    @torch.no_grad()
+    def restore(self, model: nn.Module) -> None:
+        """恢复原始（训练用）权重（验证/保存后调用）。"""
+        if self._backup is not None:
+            model.load_state_dict(self._backup)
+            self._backup = None
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 训练器
 # ─────────────────────────────────────────────────────────────────────────────
@@ -150,13 +195,20 @@ class TrainerV3:
 
         self.optimizer = torch.optim.AdamW(
             model.parameters(), lr=tcfg["lr"], weight_decay=1e-4)
-        # CosineAnnealingWarmRestarts: T_0 aligned with each Phase length (default 30).
-        # Each Phase gets a full LR cycle (lr → eta_min), restarting at Phase boundaries.
-        # e.g. T_0=30: Phase1 ep1-30 decays 1e-4→1e-6; Phase2 ep31 resets to 1e-4.
-        _lr_T0      = tcfg.get("lr_T0", 30)
+        # LR schedule:
+        #   "cosine"        (v14 默认): 单段 cosine 衰减 lr→eta_min over `epochs`。
+        #                   v13 诊断：warm-restart 在 ep15/30/... 把 LR 跳回 1e-4，
+        #                   反复破坏已收敛模型（ep31 vMAE 飙到 7.40），无净收益。
+        #   "warm_restarts" (v13 行为): CosineAnnealingWarmRestarts(T_0=lr_T0)。
         _lr_eta_min = tcfg.get("lr_eta_min", 1e-6)
-        self.scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
-            self.optimizer, T_0=_lr_T0, T_mult=1, eta_min=_lr_eta_min)
+        _lr_sched   = tcfg.get("lr_schedule", "warm_restarts")
+        if _lr_sched == "cosine":
+            self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+                self.optimizer, T_max=self.epochs, eta_min=_lr_eta_min)
+        else:
+            _lr_T0 = tcfg.get("lr_T0", 30)
+            self.scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
+                self.optimizer, T_0=_lr_T0, T_mult=1, eta_min=_lr_eta_min)
 
         self.criterion = MultiTaskLossV3(
             lambda_bis=tcfg.get("lambda_bis", 1.0),
@@ -170,6 +222,8 @@ class TrainerV3:
             transition_boost=tcfg.get("transition_boost", 2.0),
             vel_threshold=tcfg.get("vel_threshold", 0.2),
             huber_delta=tcfg.get("huber_delta", 0.10),
+            bis_transition_weight=tcfg.get("bis_transition_weight", 1.0),
+            bis_transition_dbis=tcfg.get("bis_transition_dbis", 0.02),
             focal_gamma=tcfg.get("focal_gamma", 2.0),
             focal_alpha=tcfg.get("focal_alpha", 0.5),
             stim_pos_weight=tcfg.get("stim_pos_weight", 15.0),
@@ -192,6 +246,12 @@ class TrainerV3:
             self.scaler = None
 
         self.model.to(self.device)
+
+        # 权重 EMA（v14）— 用 EMA 权重做验证/选点/上报，消除验证抖动
+        self.use_weight_ema = tcfg.get("use_weight_ema", False)
+        self.ema = (ModelEMA(self.model, tcfg.get("weight_ema_decay", 0.999))
+                    if self.use_weight_ema else None)
+
         self.best_val_mae  = float("inf")
         self.best_val_loss = float("inf")
         self.no_improve    = 0
@@ -219,6 +279,9 @@ class TrainerV3:
                               weights_only=False)
             self.model.load_state_dict(ckpt["model_state_dict"])
             self.optimizer.load_state_dict(ckpt["optimizer_state_dict"])
+            # 重新以恢复后的权重为 EMA 起点（checkpoint 已是 EMA 权重）
+            if self.ema is not None:
+                self.ema = ModelEMA(self.model, self.ema.decay)
             self.best_val_mae  = ckpt.get("val_mae", float("inf"))
             self.best_val_loss = ckpt["val_loss"]
             self.start_epoch   = ckpt["epoch"] + 1
@@ -350,8 +413,12 @@ class TrainerV3:
                 torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
                 self.optimizer.step()
 
+            # 权重 EMA 更新（v14）— 每个 optimizer step 后
+            if self.ema is not None:
+                self.ema.update(self.model)
+
             # EMA update teacher projections (BYOL-style, v11 fix)
-            if cur_phase >= 3:
+            if cur_phase >= 3 and self.model.distill is not None:
                 self.model.distill.update_teacher_ema()
 
             bs = wave.shape[0] * wave.shape[1]
@@ -569,7 +636,13 @@ class TrainerV3:
 
             _log(f"Epoch {epoch}/{self.epochs} val start", "EPOCH")
             t_val = time.time()
-            val_m = self.val_epoch(epoch)
+            # v14：用 EMA 权重做验证（稳定指标 + 选点依据）；验证后恢复训练权重
+            if self.ema is not None:
+                self.ema.store_and_apply(self.model)
+                val_m = self.val_epoch(epoch)
+                self.ema.restore(self.model)
+            else:
+                val_m = self.val_epoch(epoch)
             val_sec = time.time() - t_val
 
             if self.device.type == "cuda":
@@ -615,13 +688,18 @@ class TrainerV3:
                                      + (1 - self._ema_alpha) * self._ema_val_mae)
             ema_str = f"{self._ema_val_mae:.2f}"
 
-            # 检查点：以原始 val_mae 为准（抓住每一个真实最优点）
+            # 检查点：保存被验证的那组权重（EMA 启用时即 EMA 权重）
             improved = cur_mae < self.best_val_mae
             flag = "*** BEST" if improved else ""
             if improved:
                 self.best_val_mae  = cur_mae
                 self.best_val_loss = val_m["val_loss"]
-                self._save_checkpoint(epoch, cur_mae)
+                if self.ema is not None:
+                    self.ema.store_and_apply(self.model)
+                    self._save_checkpoint(epoch, cur_mae)
+                    self.ema.restore(self.model)
+                else:
+                    self._save_checkpoint(epoch, cur_mae)
 
             # 早停计数：以 EMA val_mae 为准（防单次抖动误触发）
             if self._ema_val_mae < self.best_val_mae_ema:

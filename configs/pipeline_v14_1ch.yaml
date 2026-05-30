@@ -1,0 +1,169 @@
+# EEG Pipeline Configuration v14-1ch — 单通道（ADS1299 2026-05 单电极差分板）
+#
+# 与 pipeline_v14.yaml 相同的训练配方，但模型为【单通道】：
+#   - eeg.channels 只用 1 路 → n_eeg_channels=1
+#   - feature_dim: 18/ch × 1 + 2(跨通道槽: α不对称[单通道恒为0] + 平均SQI) = 20
+#   - 跨通道 α 不对称特征在单通道下退化为 0（features.py 已处理 n_channels<2）
+#
+# ⚠ 需要重新预处理与重训练：
+#   现有 dataset_v3_v13.h5 是 2 通道。单通道模型需用单通道重建 HDF5：
+#     python scripts/preprocess_data.py --config configs/pipeline_v14_1ch.yaml --v3
+#     python scripts/train.py --config configs/pipeline_v14_1ch.yaml \
+#         --data outputs/preprocessed/dataset_v3_v14_1ch.h5
+#   VitalDB 有 2 路 EEG；这里取 EEG1_WAV 单路训练，与单电极硬件对齐。
+#
+# 部署：单通道 checkpoint 加载后，bis_predictor 会自动按 cfg.eeg.channels=1 走单通道
+#   （无需把单路镜像成 2 路）。在拿到单通道模型前，现有 2ch v14 checkpoint 也能用——
+#   预测器会把单路输入镜像为 2 路喂给 2ch 模型（α不对称=0，结果可用但有冗余计算）。
+
+eeg:
+  channels: ["BIS/EEG1_WAV"]   # 单通道
+  srate: 128
+
+labels:
+  tracks: ["BIS/BIS", "BIS/SQI", "BIS/SR"]
+  target: "BIS/BIS"
+  sqi_track: "BIS/SQI"
+  sr_track: "BIS/SR"
+
+windowing:
+  window_sec: 4
+  stride_sec: 1
+  label_lag_sec: 15
+  min_valid_label: 10
+  max_valid_label: 100
+  baseline_sec: 60
+
+normalization:
+  use_band_ratio: true
+  delta_dominance_thresh: 0.90
+  alpha_beta_band_hz: [8.0, 30.0]
+
+sqi:
+  min_score: 0.5
+  kurtosis_thresh: 5.0
+  high_freq_ratio_thresh: 0.4
+
+filters:
+  median_kernel_ms: 20
+  highpass_hz: 0.1
+  lowpass_hz: 47.0
+  notch_hz: [50.0, 60.0]   # China grid 50Hz (+60 harmless) — matches live inference notch
+  notch_q: 30.0
+
+wavelet:
+  wavelet: "db4"
+  level: 5
+  esu_energy_thresh: 3.0
+
+features:
+  bands:
+    delta: [0.5, 4.0]
+    theta: [4.0, 8.0]
+    alpha: [8.0, 13.0]
+    beta:  [13.0, 30.0]
+    gamma: [30.0, 47.0]
+  permutation_entropy:
+    order: 6
+    delay: 1
+  sef95: true
+  lzc: true
+  bsr: true
+  bsr_thresholds_uv: [2.0, 5.0, 10.0]
+  spectral_slope: true
+  gamma_emg_ratio: true
+  sigma_power: true
+  slow_oscillation: true
+  dfa_alpha: false
+  zero_crossing_rate: true
+  hjorth_mobility: true
+  hjorth_complexity: false
+  pac: true
+
+model:
+  cnn_channels: [32, 64, 128]
+  cnn_kernel: 7
+  feature_dim: 20            # 18/ch × 1ch + 2 (α不对称 + 平均SQI)
+  d_model: 128
+  gru_layers: 2
+  gru_dropout: 0.15
+  lnn_backend: "gru"
+  sqi_inertia_threshold: 0.5
+  bsr_layer: true
+  grad_checkpoint: true
+
+  bis_head: "shared"
+  norm_type: "batch"
+  enable_multimodal: false
+
+  pk_hidden: 64
+  vital_hidden: 64
+  d_proj: 64
+
+training:
+  model_version: "v3"
+
+  seq_len: 300
+  seq_stride: 150
+
+  case_std_pct_low: 10
+  case_std_pct_high: 90
+  min_seq_std: 0.0
+  balance_bis: false
+
+  phase2_start_epoch: 1
+  phase3_start_epoch: 9999
+
+  lambda_bis:   2.0
+  lambda_phase: 0.03
+  lambda_stim:  0.15
+
+  bis_transition_weight: 3.0
+  bis_transition_dbis:   0.02
+
+  lambda_pkd:           0.0
+  lambda_vitald:        0.0
+  lambda_distill_pk:    0.0
+  lambda_distill_vital: 0.0
+  lambda_trans:         0.0
+
+  transition_boost: 2.0
+  vel_threshold:    0.2
+
+  focal_alpha:     0.5
+  stim_pos_weight: 15.0
+  focal_gamma:     2.0
+
+  use_auto_weight:  false
+  auto_weight_temp: 0.5
+
+  transition_upsample_factor: 2
+
+  batch_size: 32
+  lr: 1.0e-4
+  epochs: 60
+  patience: 20
+
+  lr_schedule: "cosine"
+  lr_eta_min: 1.0e-6
+
+  use_weight_ema:  true
+  weight_ema_decay: 0.999
+
+  stim_warmup_epochs:   5
+  phase3_warmup_epochs: 5
+
+  noise_std: 0.05
+  val_split: 0.15
+  test_split: 0.1
+  seed: 42
+  steps_per_epoch: null
+  n_prefetch: 4
+  huber_delta: 0.05
+
+paths:
+  raw_data: "raw_data"
+  preprocessed: "outputs/preprocessed"
+  checkpoints: "outputs/checkpoints/v14_1ch"
+  logs: "outputs/logs/v14_1ch"
+  multimodal_h5: "outputs/preprocessed/dataset_v3_v14_1ch.h5"

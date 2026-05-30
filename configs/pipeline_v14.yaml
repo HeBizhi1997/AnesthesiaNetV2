@@ -1,0 +1,193 @@
+# EEG Pipeline Configuration v14 — MERIDIAN v14
+#
+# v14 优化（基于 v13 训练日志诊断，见 memory/training_history.md）：
+#
+#   诊断结论：v13 报告的 "MAE 4.57" 是噪声峰（EMA≈5.3 才是真值）；模型 ep15 即收敛，
+#   之后 70 epoch 零净进展；Phase-3 多模态对 BIS MAE 无增益且把 StAUC 从 0.81 拖到 0.69；
+#   诱导/复苏 MAE ~9-10（整体 2×）。v14 全是定点修复，不改骨干、复用 v13 特征与 HDF5。
+#
+#   P1 评估方法学：
+#     - use_weight_ema: 权重 EMA，用 EMA 权重做验证/选点/上报 → 消除验证抖动、拿到真实最优
+#     - lr_schedule: "cosine" 单段衰减，去掉 warm-restart（v13 ep15/30 的 LR 跳变反复破坏收敛）
+#     - patience: 70→20（ep15 即收敛，无需 70 耐心）；epochs 60
+#   P2 诱导/复苏：
+#     - bis_head: "shared" 单一共享头 + 软相位条件（替代 4 硬专家，过渡区不再饿死）
+#     - bis_transition_weight: 3.0 —— 按 |Δlabel/步| 对过渡区 L_bis 加权（不依赖药物数据）
+#   P3 去多模态：
+#     - enable_multimodal: false —— 不构建 PK/Vital/蒸馏；phase3_start=9999 永不触发
+#   P4 损失/刺激：
+#     - huber_delta: 0.05（=5 BIS，恢复对伪迹标签尖峰的鲁棒性；v13 误设 0.10≈MSE）
+#     - phase2_start_epoch: 1 —— stim 从第 1 epoch 起联合训练（gentle warmup），不走崩溃台阶
+#   P5 稳健性：
+#     - norm_type: "group" —— GroupNorm 取代 BatchNorm，消除 eval running-stat 抖动
+#
+#   训练命令（复用 v13 预处理 HDF5，无需重新 preprocess）：
+#     python scripts/train.py --config configs/pipeline_v14.yaml \
+#         --data outputs/preprocessed/dataset_v3_v13.h5
+
+eeg:
+  channels: ["BIS/EEG1_WAV", "BIS/EEG2_WAV"]
+  srate: 128
+
+labels:
+  tracks: ["BIS/BIS", "BIS/SQI", "BIS/SR"]
+  target: "BIS/BIS"
+  sqi_track: "BIS/SQI"
+  sr_track: "BIS/SR"
+
+windowing:
+  window_sec: 4
+  stride_sec: 1
+  label_lag_sec: 15
+  min_valid_label: 10
+  max_valid_label: 100
+  baseline_sec: 60
+
+normalization:
+  use_band_ratio: true
+  delta_dominance_thresh: 0.90
+  alpha_beta_band_hz: [8.0, 30.0]
+
+sqi:
+  min_score: 0.5
+  kurtosis_thresh: 5.0
+  high_freq_ratio_thresh: 0.4
+
+filters:
+  median_kernel_ms: 20
+  highpass_hz: 0.1
+  lowpass_hz: 47.0
+  notch_hz: [60.0]
+  notch_q: 30.0
+
+wavelet:
+  wavelet: "db4"
+  level: 5
+  esu_energy_thresh: 3.0
+
+features:
+  bands:
+    delta: [0.5, 4.0]
+    theta: [4.0, 8.0]
+    alpha: [8.0, 13.0]
+    beta:  [13.0, 30.0]
+    gamma: [30.0, 47.0]
+  permutation_entropy:
+    order: 6
+    delay: 1
+  sef95: true
+  lzc: true
+  bsr: true
+  bsr_thresholds_uv: [2.0, 5.0, 10.0]
+  spectral_slope: true
+  gamma_emg_ratio: true
+  sigma_power: true
+  slow_oscillation: true
+  dfa_alpha: false
+  zero_crossing_rate: true
+  hjorth_mobility: true
+  hjorth_complexity: false
+  pac: true
+
+model:
+  cnn_channels: [32, 64, 128]
+  cnn_kernel: 7
+  feature_dim: 38           # 与 v13 一致（复用同一 HDF5）
+  d_model: 128
+  gru_layers: 2
+  gru_dropout: 0.15
+  lnn_backend: "gru"
+  sqi_inertia_threshold: 0.5
+  bsr_layer: true
+  grad_checkpoint: true
+
+  # v14 新增
+  bis_head: "shared"        # P2: 单一共享头 + 软相位条件
+  norm_type: "batch"        # P5: 回退 BatchNorm —— GroupNorm 在 eval/no_grad/autocast
+                            #     路径下慢 8-10x（实测 val 19s→2234s，eta 53h）。
+                            #     验证抖动已由权重 EMA(P1) 解决，GroupNorm 收益冗余。
+  enable_multimodal: false  # P3: 不构建 PK/Vital/蒸馏（EEG-only 训练）
+
+  # 多模态超参（enable_multimodal=false 时不生效，保留以兼容 from_config）
+  pk_hidden: 64
+  vital_hidden: 64
+  d_proj: 64
+
+training:
+  model_version: "v3"
+
+  seq_len: 300
+  seq_stride: 150
+
+  case_std_pct_low: 10
+  case_std_pct_high: 90
+  min_seq_std: 0.0
+  balance_bis: false
+
+  # P3/P4: stim 从 ep1 起联合训练；Phase-3 永不触发（无多模态）
+  phase2_start_epoch: 1
+  phase3_start_epoch: 9999
+
+  # Loss weights
+  lambda_bis:   2.0
+  lambda_phase: 0.03
+  lambda_stim:  0.15
+
+  # P2: 过渡区 L_bis 加权（按标签斜率，打击诱导/复苏高误差）
+  bis_transition_weight: 3.0
+  bis_transition_dbis:   0.02   # |Δlabel/步| 阈值 ≈ 2 BIS/s
+
+  # 多模态辅助（全关闭）
+  lambda_pkd:           0.0
+  lambda_vitald:        0.0
+  lambda_distill_pk:    0.0
+  lambda_distill_vital: 0.0
+  lambda_trans:         0.0
+
+  transition_boost: 2.0
+  vel_threshold:    0.2
+
+  # Stim detection
+  focal_alpha:     0.5
+  stim_pos_weight: 15.0
+  focal_gamma:     2.0
+
+  use_auto_weight:  false
+  auto_weight_temp: 0.5
+
+  # 过渡期序列上采样（增加诱导/复苏序列出现频率）
+  transition_upsample_factor: 2
+
+  # Optimizer
+  batch_size: 32
+  lr: 1.0e-4
+  epochs: 60
+  patience: 20
+
+  # P1: 单段 cosine 衰减（去 warm-restart）
+  lr_schedule: "cosine"
+  lr_eta_min: 1.0e-6
+
+  # P1: 权重 EMA
+  use_weight_ema:  true
+  weight_ema_decay: 0.999
+
+  # Warmup
+  stim_warmup_epochs:   5    # stim 在 ep1→ep6 线性热身
+  phase3_warmup_epochs: 5    # 未使用（无 Phase 3）
+
+  # Other
+  noise_std: 0.05
+  val_split: 0.15
+  test_split: 0.1
+  seed: 42
+  steps_per_epoch: null
+  n_prefetch: 4
+  huber_delta: 0.05          # P4: 5 BIS，恢复 Huber 鲁棒性
+
+paths:
+  raw_data: "raw_data"
+  preprocessed: "outputs/preprocessed"
+  checkpoints: "outputs/checkpoints/v14"
+  logs: "outputs/logs/v14"
+  multimodal_h5: "outputs/preprocessed/dataset_v3_v13.h5"   # 复用 v13 HDF5（特征相同）

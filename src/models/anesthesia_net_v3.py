@@ -73,6 +73,30 @@ class PhaseGatedBISHead(nn.Module):
         return (preds * phase_probs).sum(-1, keepdim=True)
 
 
+class SharedBISHead(nn.Module):
+    """
+    单一共享 BIS 回归头 + 软相位条件（v14）。
+
+    相比 PhaseGatedBISHead（4 个硬专家 × softmax 门控）的优势：
+      - 所有数据训练同一个头，不会让 induction(0.3%)/recovery(1.5%) 专家饿死。
+      - phase 仅作为软特征拼入输入，对过渡区做轻度调制而非硬切换。
+      v13 诊断：硬门控头在过渡区门控模糊 → 诱导/复苏 MAE ~9-10（整体 2×）。
+    """
+
+    def __init__(self, in_dim: int, n_phases: int = 4):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(in_dim + n_phases, in_dim // 2),
+            nn.GELU(),
+            nn.Linear(in_dim // 2, 1),
+            nn.Sigmoid(),
+        )
+
+    def forward(self, h: torch.Tensor, phase_probs: torch.Tensor) -> torch.Tensor:
+        """h:(B,T,D) phase_probs:(B,T,4) → pred:(B,T,1)"""
+        return self.net(torch.cat([h, phase_probs], dim=-1))
+
+
 class PKDHead(nn.Module):
     """
     PK/PD 辅助回归头（训练时教师侧）。
@@ -153,6 +177,10 @@ class AnesthesiaNetV3(nn.Module):
         sqi_inertia_threshold: float = 0.5,
         bsr_layer: bool        = True,
         grad_checkpoint: bool  = True,
+        # v14 新增
+        bis_head: str          = "gated",   # "gated"(v13 硬专家) | "shared"(v14 软条件)
+        norm_type: str         = "batch",   # "batch" | "group"(消除 eval running-stat 噪声)
+        enable_multimodal: bool = True,     # False=不构建 PK/Vital/蒸馏（EEG-only 训练）
         # v3 新增：多模态教师网络参数
         pk_hidden: int         = 64,
         vital_hidden: int      = 64,
@@ -160,6 +188,7 @@ class AnesthesiaNetV3(nn.Module):
     ):
         super().__init__()
         cnn_channels = cnn_channels or [32, 64, 128]
+        self.enable_multimodal = enable_multimodal
 
         # ── EEG 编码器（复用 v2 WaveformEncoder）────────────────────────────
         self.wave_enc = WaveformEncoder(
@@ -170,6 +199,7 @@ class AnesthesiaNetV3(nn.Module):
             global_pool=True,
             bsr_layer=bsr_layer,
             use_grad_checkpoint=grad_checkpoint,
+            norm_type=norm_type,
         )
         cnn_out = self.wave_enc.out_dim   # 128
 
@@ -204,20 +234,28 @@ class AnesthesiaNetV3(nn.Module):
             nn.Linear(d_model, 32), nn.GELU(),
             nn.Linear(32, 1),
         )
-        self.bis_head = PhaseGatedBISHead(d_model, self.N_PHASES)
+        if bis_head == "shared":
+            self.bis_head = SharedBISHead(d_model, self.N_PHASES)
+        else:
+            self.bis_head = PhaseGatedBISHead(d_model, self.N_PHASES)
 
-        # ── v3 新增：多模态教师网络（训练时使用，推理时忽略）──────────────
-        self.pk_enc     = PKEncoder(in_dim=6, hidden=pk_hidden, d_pk=pk_hidden)
-        self.vital_enc  = VitalEncoder(in_dim=5, hidden=vital_hidden, d_v=vital_hidden)
-        self.pkd_head   = PKDHead(d_pk=pk_hidden)
-        self.vitald_head = VitalDHead(d_vital=vital_hidden)   # v3 fix: gives VitalEncoder gradient
-
-        self.distill = CrossModalDistillation(
-            d_student=d_model,
-            d_pk=pk_hidden,
-            d_vital=vital_hidden,
-            d_proj=d_proj,
-        )
+        # ── v3 多模态教师网络（仅 enable_multimodal=True 时构建）────────────
+        # v14 诊断：Phase-3 蒸馏对 BIS MAE 无增益且拖垮 StAUC（见 training_history）。
+        # EEG-only 训练时置 None，节省参数且 forward 安全跳过。
+        if enable_multimodal:
+            self.pk_enc     = PKEncoder(in_dim=6, hidden=pk_hidden, d_pk=pk_hidden)
+            self.vital_enc  = VitalEncoder(in_dim=5, hidden=vital_hidden, d_v=vital_hidden)
+            self.pkd_head   = PKDHead(d_pk=pk_hidden)
+            self.vitald_head = VitalDHead(d_vital=vital_hidden)  # v3 fix: gives VitalEncoder gradient
+            self.distill = CrossModalDistillation(
+                d_student=d_model,
+                d_pk=pk_hidden,
+                d_vital=vital_hidden,
+                d_proj=d_proj,
+            )
+        else:
+            self.pk_enc = self.vital_enc = self.pkd_head = None
+            self.vitald_head = self.distill = None
 
         self.d_model = d_model
 
@@ -266,8 +304,11 @@ class AnesthesiaNetV3(nn.Module):
         # ── 时序模型 ──────────────────────────────────────────────────────
         h_seq, h = self.temporal(seq, hx)                       # (B, T, d_model)
 
-        # SQI 惰性模式 — 向量化实现（v10 优化，消除 T-1 次 Python→CUDA 同步）
-        # 原理：last_src[b,t] = 最近一个 sqi_ok 为 True 的时步索引
+        # SQI 惰性模式 — 输出级保持（非递归状态冻结）
+        # 注意：GRU 的递归隐状态仍会处理坏 SQI 窗口；此处只在「输出」层面，
+        #   将坏 SQI 时步的 h_seq 替换为最近一个 sqi_ok=True 时步的输出，
+        #   从而冻结下游 BIS/相位预测，避免噪声窗口污染显示值。
+        # 向量化实现（v10）：last_src[b,t] = 最近一个 sqi_ok 为 True 的时步索引
         # 等价于对 pos_masked = (t if sqi_ok[b,t] else -1) 做 cummax
         if self.sqi_inertia_threshold > 0.0 and T > 1:
             sqi_ok = (sqi.mean(-1) >= self.sqi_inertia_threshold)   # (B, T)
@@ -291,8 +332,8 @@ class AnesthesiaNetV3(nn.Module):
             "h":            h,
         }
 
-        # ── 多模态训练分支（推理时跳过）─────────────────────────────────────
-        if drug_ce is not None:
+        # ── 多模态训练分支（推理时 / enable_multimodal=False 时跳过）────────
+        if drug_ce is not None and self.pk_enc is not None:
             h_pk    = self.pk_enc(drug_ce)                      # (B, T, d_pk)
             bis_pkd = self.pkd_head(h_pk)                       # (B, T, 1)
             out["bis_pkd"] = bis_pkd
@@ -341,6 +382,9 @@ class AnesthesiaNetV3(nn.Module):
             sqi_inertia_threshold=m.get("sqi_inertia_threshold", 0.5),
             bsr_layer=m.get("bsr_layer", True),
             grad_checkpoint=m.get("grad_checkpoint", True),
+            bis_head=m.get("bis_head", "gated"),
+            norm_type=m.get("norm_type", "batch"),
+            enable_multimodal=m.get("enable_multimodal", True),
             pk_hidden=m.get("pk_hidden", 64),
             vital_hidden=m.get("vital_hidden", 64),
             d_proj=m.get("d_proj", 64),

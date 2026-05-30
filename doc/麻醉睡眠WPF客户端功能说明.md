@@ -1,7 +1,8 @@
 # MERIDIAN 麻醉睡眠监测系统 — 功能说明
 
-> 版本：v1.0 | 日期：2026-05-26  
-> 项目：EEGMonitor.AnesthesiaSleep (WPF, .NET 8)
+> 版本：v2.0 | 日期：2026-05-28  
+> 项目：EEGMonitor.AnesthesiaSleep (WPF, .NET 8)  
+> 更新：单页仪表盘布局、模拟器弹窗化、脑电波形图、生命体征面板、分布比例条、夜间模式
 
 ---
 
@@ -342,3 +343,17 @@ EEGMonitor.AnesthesiaSleep/
 ### 11.3 数据总线
 
 `ResultBroker` 是核心发布-订阅总线，解耦数据生产（DataPipeline / SleepSimulator）与数据消费（各 ViewModel）。所有 UI 更新通过 `Dispatcher.Invoke` 确保线程安全。
+
+### 11.4 关键架构决策与 Bug 修复记录
+
+| 问题 | 根因 | 修复 |
+|------|------|------|
+| **倍速切换无效** | `tickMs` 在 RunLoop 外部计算一次，循环内始终用旧值 | `tickMs` 移入循环体，每轮重新读取 `PlaybackSpeed` |
+| **重新模拟不清缓存** | `Start()` 仅重置内部状态，未通知 ViewModel | 新增 `SimulationStarted` 事件 → `ResetRequested` → ShellVM 清空所有子 VM 和 EEG 缓冲区 |
+| **催眠图/统计不更新** | `ObservableCollection.Add()` 触发 `CollectionChanged`，但转发逻辑监听的是 `PropertyChanged` | 改为 `Staging.EpochCompleted` 事件直接通知 `Statistics.OnEpochCompleted` |
+| **Reset 后图表空白** | `UpdateHypnogram()`/`UpdateTrendChart()` 访问**字段**（`_hypnogramModel`），Reset 将其置 null 后懒初始化失效 | 改为通过**属性**获取（`HypnogramModel`），触发 `??=` 重建 |
+| **模拟时图表无数据** | 模拟器后台线程直接调 `_broker.Publish()`，OxyPlot 更新在后台线程被静默丢弃 | `Dispatcher.Invoke(() => _broker.Publish(result))` 确保 UI 线程 |
+| **EEG 波形图闪烁** | 60x 倍速每秒 60 次全量重绘 256 点，OxyPlot 渲染队列溢出 | 100ms 节流，波形图最多 10Hz 刷新 |
+| **睡眠分布条 25% 等宽** | ColumnDefinition `Width="*"` 四列等分，与实际百分比无关 | `PercentageToStarWidthConverter` 将百分比值映射为 `GridLength(value, Star)` |
+| **Color→Brush 类型错误** | XAML 中 `Background="{StaticResource BgCardColor}"` 传递 Color 给 Brush 属性 | 全部改为 `BgCardBrush`（App.xaml 已定义对应的 Brush 资源） |
+| **NaNConv 与 StringFormat 冲突** | Converter 返回格式化字符串后再经 StringFormat 二次格式化导致异常 | NaNConv 统一通过 `ConverterParameter` 控制精度（F0/F1），移除冗余 StringFormat |

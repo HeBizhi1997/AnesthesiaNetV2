@@ -39,6 +39,21 @@ import torch.nn as nn
 from torch.utils.checkpoint import checkpoint as grad_checkpoint
 
 
+def _make_norm(norm_type: str, num_ch: int, groups: int = 8) -> nn.Module:
+    """
+    1-D 归一化层工厂。
+
+    "batch" : BatchNorm1d —— 跨 batch 统计；eval 用 running stats，
+              在 per-window(B*T) 流上 running stats 抖动会传到验证 → vMAE 抖动。
+    "group" : GroupNorm —— per-sample 统计，无 running state，train/eval 一致，
+              消除 v13 观察到的逐 epoch 验证抖动（v14）。
+    """
+    if norm_type == "group":
+        g = num_ch if num_ch < groups else (groups if num_ch % groups == 0 else 1)
+        return nn.GroupNorm(g, num_ch)
+    return nn.BatchNorm1d(num_ch)
+
+
 class WaveformEncoder(nn.Module):
     def __init__(
         self,
@@ -49,6 +64,7 @@ class WaveformEncoder(nn.Module):
         global_pool: bool = True,     # True = lightweight; False = legacy large
         bsr_layer: bool = True,       # ★ 新增：dilation=16 的 BSR 检测层
         use_grad_checkpoint: bool = True,  # 梯度检查点：用计算换内存
+        norm_type: str = "batch",     # "batch" | "group"(v14: 消除 eval 抖动)
     ):
         """
         bsr_layer : 是否添加 dilation=16 的 BSR 专用层。
@@ -69,7 +85,7 @@ class WaveformEncoder(nn.Module):
             layers += [
                 nn.Conv1d(in_ch, out_ch, kernel_size=kernel_size,
                           padding=padding, dilation=dil),
-                nn.BatchNorm1d(out_ch),
+                _make_norm(norm_type, out_ch),
                 nn.GELU(),
             ]
             if not global_pool:
@@ -87,7 +103,7 @@ class WaveformEncoder(nn.Module):
             self.bsr_conv = nn.Sequential(
                 nn.Conv1d(cnn_out, cnn_out, kernel_size=kernel_size,
                           padding=bsr_pad, dilation=bsr_dil),
-                nn.BatchNorm1d(cnn_out),
+                _make_norm(norm_type, cnn_out),
                 nn.GELU(),
             )
             # 可学习的跳跃权重：初始化为 sigmoid(-3)≈0.047，近似禁用 BSR 层

@@ -100,23 +100,26 @@ class BISPredictor:
         self._cfg       = {}
         self._feat_ext  = None
         self._sqi_comp  = None
+        # Channel count the model expects — derived from the checkpoint config in
+        # _try_load_model (eeg.channels). Single-channel board → 1ch model just works.
+        self._n_channels = self._N_CHANNELS
 
-        # Per-channel rolling buffer at 128 Hz
+        if _TORCH_AVAILABLE:
+            self._try_load_model(model_path)   # sets self._cfg + self._n_channels
+
+        # Per-channel rolling buffer at 128 Hz — sized to the model's channel count.
         self._buf: list[deque] = [
-            deque(maxlen=self._WIN_SAMP) for _ in range(self._N_CHANNELS)
+            deque(maxlen=self._WIN_SAMP) for _ in range(self._n_channels)
         ]
 
         # Per-session amplitude normalisation (matches training VitalLoader.process_file)
         # Scale = MAD / 0.6745 ≈ robust σ, computed from the first _CALIB_SEC seconds.
         # Training divided every window by this scale → model expects unitless input ~O(1).
-        self._calib_buf: list[list[float]] = [[] for _ in range(self._N_CHANNELS)]
-        self._norm_scale: np.ndarray = np.ones(self._N_CHANNELS, dtype=np.float32)
+        self._calib_buf: list[list[float]] = [[] for _ in range(self._n_channels)]
+        self._norm_scale: np.ndarray = np.ones(self._n_channels, dtype=np.float32)
         self._calibrated: bool = False
         self._dead_channel: int | None = None    # auto-detected dead channel
         self._mirror_source: int | None = None   # which channel to mirror from
-
-        if _TORCH_AVAILABLE:
-            self._try_load_model(model_path)
 
     # ── Model loading ─────────────────────────────────────────────────────────
 
@@ -134,6 +137,11 @@ class BISPredictor:
             try:
                 ck = torch.load(path, map_location="cpu", weights_only=False)
                 self._cfg = ck.get("cfg") or ck.get("config") or {}
+
+                # Channel count from checkpoint (1ch single-electrode board vs 2ch).
+                ch_list = (self._cfg.get("eeg", {}) or {}).get("channels")
+                if ch_list:
+                    self._n_channels = len(ch_list)
 
                 from src.models.anesthesia_net_v3 import AnesthesiaNetV3
                 model = AnesthesiaNetV3.from_config(self._cfg)
@@ -160,7 +168,7 @@ class BISPredictor:
             sqi_cfg  = self._cfg.get("sqi", {})
             self._feat_ext = FeatureExtractor(feat_cfg, fs=float(self._TARGET_FS))
             self._sqi_comp = SQIComputer(sqi_cfg)
-            self._feature_dim = self._feat_ext.total_feature_dim_for(self._N_CHANNELS)
+            self._feature_dim = self._feat_ext.total_feature_dim_for(self._n_channels)
             cfg_dim = self._cfg.get("model", {}).get("feature_dim")
             if cfg_dim and cfg_dim != self._feature_dim:
                 logger.warning(
@@ -179,8 +187,8 @@ class BISPredictor:
         for buf in self._buf:
             buf.clear()
         self._hx = None
-        self._calib_buf = [[] for _ in range(self._N_CHANNELS)]
-        self._norm_scale = np.ones(self._N_CHANNELS, dtype=np.float32)
+        self._calib_buf = [[] for _ in range(self._n_channels)]
+        self._norm_scale = np.ones(self._n_channels, dtype=np.float32)
         self._calibrated = False
         self._dead_channel = None
         self._mirror_source = None
@@ -202,12 +210,15 @@ class BISPredictor:
     def _streaming_predict(self, eeg_epoch: np.ndarray) -> float:
         import torch
 
-        # 1. Ensure we have 2 channels
-        n_ch = eeg_epoch.shape[1]
-        if n_ch < 2:
-            eeg2 = np.column_stack([eeg_epoch, eeg_epoch])
+        # 1. Adapt input channels → model's expected channel count (self._n_channels).
+        #    Fewer input channels (single-electrode board) → mirror cyclically.
+        #    More → take the first N.
+        n_ch_in = eeg_epoch.shape[1]
+        want = self._n_channels
+        if n_ch_in >= want:
+            eegN = eeg_epoch[:, :want]
         else:
-            eeg2 = eeg_epoch[:, :2]
+            eegN = np.column_stack([eeg_epoch[:, i % n_ch_in] for i in range(want)])
 
         # 2. Resample chunk to 128 Hz
         g    = gcd(self._TARGET_FS, self.input_fs)
@@ -215,17 +226,17 @@ class BISPredictor:
         down = self.input_fs // g
         try:
             resampled = np.stack(
-                [resample_poly(eeg2[:, ch].astype(np.float64), up, down)
-                 for ch in range(self._N_CHANNELS)],
+                [resample_poly(eegN[:, ch].astype(np.float64), up, down)
+                 for ch in range(self._n_channels)],
                 axis=0,
-            ).astype(np.float32)   # (2, new_len)
+            ).astype(np.float32)   # (n_channels, new_len)
         except Exception as e:
             logger.warning(f"Resample error: {e}")
             return float("nan")
 
         # 3. Append to rolling buffer + calibration accumulator
         for i in range(resampled.shape[1]):
-            for ch in range(self._N_CHANNELS):
+            for ch in range(self._n_channels):
                 v = float(resampled[ch, i])
                 # Auto-mirror: if channel is dead, use good channel's data
                 if getattr(self, '_dead_channel', None) is not None and ch == self._dead_channel:
@@ -248,8 +259,8 @@ class BISPredictor:
         # The 2.5× factor maps narrow-band alpha+beta RMS to full-bandwidth equivalent σ
         # (empirically calibrated against awake EEG where delta ≈ 2.5× alpha RMS).
         if not self._calibrated and len(self._calib_buf[0]) >= self._CALIB_SAMP:
-            scale = np.ones(self._N_CHANNELS, dtype=np.float32)
-            for ch in range(self._N_CHANNELS):
+            scale = np.ones(self._n_channels, dtype=np.float32)
+            for ch in range(self._n_channels):
                 arr = np.array(self._calib_buf[ch], dtype=np.float64)
 
                 # Standard MAD fallback
@@ -277,31 +288,34 @@ class BISPredictor:
 
             # Dead-channel detection: if any channel has calibration σ < 2 uV,
             # it's likely a broken electrode/amplifier. Mirror the good channel.
+            # Only possible with ≥2 channels — a single-electrode board has no fallback.
             dead_threshold = 2.0  # uV — below this, channel is considered dead
-            for ch in range(self._N_CHANNELS):
-                arr = np.array(self._calib_buf[ch], dtype=np.float64)
-                rms = float(np.std(arr))
-                if rms < dead_threshold:
-                    good_ch = 1 - ch  # assume the other channel is good
-                    good_arr = np.array(self._calib_buf[good_ch], dtype=np.float64)
-                    good_rms = float(np.std(good_arr))
-                    if good_rms > dead_threshold:
-                        logger.warning(
-                            f"ch{ch} appears DEAD (RMS={rms:.2f} uV) — "
-                            f"mirroring ch{good_ch} (RMS={good_rms:.1f} uV)"
-                        )
-                        scale[ch] = scale[good_ch]
-                        self._dead_channel = ch
-                        self._mirror_source = good_ch
-                        break
+            if self._n_channels >= 2:
+                for ch in range(self._n_channels):
+                    arr = np.array(self._calib_buf[ch], dtype=np.float64)
+                    rms = float(np.std(arr))
+                    if rms < dead_threshold:
+                        good_ch = 1 - ch  # assume the other channel is good
+                        good_arr = np.array(self._calib_buf[good_ch], dtype=np.float64)
+                        good_rms = float(np.std(good_arr))
+                        if good_rms > dead_threshold:
+                            logger.warning(
+                                f"ch{ch} appears DEAD (RMS={rms:.2f} uV) — "
+                                f"mirroring ch{good_ch} (RMS={good_rms:.1f} uV)"
+                            )
+                            scale[ch] = scale[good_ch]
+                            self._dead_channel = ch
+                            self._mirror_source = good_ch
+                            break
 
             self._norm_scale = scale
             self._calibrated = True
             logger.info(
-                f"Amplitude calibration: ch0={scale[0]:.3f} ch1={scale[1]:.3f} "
-                f"(MAD-σ: {mad_sigma:.3f}, delta_ratio: {delta_ratio:.1%})"
+                "Amplitude calibration: " +
+                " ".join(f"ch{c}={scale[c]:.3f}" for c in range(self._n_channels)) +
+                f" (MAD-σ: {mad_sigma:.3f}, delta_ratio: {delta_ratio:.1%})"
             )
-            self._calib_buf = [[] for _ in range(self._N_CHANNELS)]  # free memory
+            self._calib_buf = [[] for _ in range(self._n_channels)]  # free memory
 
         if len(self._buf[0]) < self._WIN_SAMP:
             return float("nan")     # still warming up
@@ -317,14 +331,24 @@ class BISPredictor:
         else:
             norm = np.array([
                 max(np.median(np.abs(window[ch] - np.median(window[ch]))) / 0.6745, 0.1)
-                for ch in range(self._N_CHANNELS)
+                for ch in range(self._n_channels)
             ], dtype=np.float64)
         window = window / norm[:, np.newaxis]
 
-        # 5. Apply window filters (matching v13 training preprocessing: 0.1 Hz highpass)
-        filter_cfg = self._cfg.get("filters", {
+        # 5. Apply window filters (matching v13 training preprocessing: 0.1 Hz highpass).
+        #    The checkpoint config notches 60 Hz (VitalDB was recorded in Korea, 60 Hz grid).
+        #    Live hardware here runs on the China grid (50 Hz), so 50 Hz mains would otherwise
+        #    leak into the model input. Notch BOTH 50 + 60 Hz: the extra band carries no signal
+        #    on either grid (and sits near the 47 Hz lowpass edge), so it's harmless to training
+        #    alignment while removing China mains. (Display chart uses 50 Hz, see DisplayEegFilter.)
+        filter_cfg = dict(self._cfg.get("filters", {
             "highpass_hz": 0.1, "lowpass_hz": 47.0, "notch_hz": [60.0], "notch_q": 30.0
-        })
+        }))
+        _notches = list(filter_cfg.get("notch_hz", [60.0]) or [])
+        for _f in (50.0, 60.0):
+            if _f not in _notches:
+                _notches.append(_f)
+        filter_cfg["notch_hz"] = _notches
         try:
             window = _window_filter(window, self._TARGET_FS, filter_cfg)
         except Exception as e:

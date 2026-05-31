@@ -205,6 +205,20 @@ class BISPredictor:
                 return val
         return self._heuristic_bis(band_powers)
 
+    def _get_filter_cfg(self) -> dict:
+        """Window-filter config: checkpoint filters + notch BOTH 50 and 60 Hz (China + Korea
+        grids). Shared by amplitude calibration and per-window filtering so they stay
+        consistent."""
+        filter_cfg = dict(self._cfg.get("filters", {
+            "highpass_hz": 0.1, "lowpass_hz": 47.0, "notch_hz": [60.0], "notch_q": 30.0
+        }))
+        notches = list(filter_cfg.get("notch_hz", [60.0]) or [])
+        for f in (50.0, 60.0):
+            if f not in notches:
+                notches.append(f)
+        filter_cfg["notch_hz"] = notches
+        return filter_cfg
+
     # ── Streaming model inference ─────────────────────────────────────────────
 
     def _streaming_predict(self, eeg_epoch: np.ndarray) -> float:
@@ -260,8 +274,14 @@ class BISPredictor:
         # (empirically calibrated against awake EEG where delta ≈ 2.5× alpha RMS).
         if not self._calibrated and len(self._calib_buf[0]) >= self._CALIB_SAMP:
             scale = np.ones(self._n_channels, dtype=np.float32)
+            _fcfg = self._get_filter_cfg()
             for ch in range(self._n_channels):
                 arr = np.array(self._calib_buf[ch], dtype=np.float64)
+                # Remove mains BEFORE measuring amplitude — otherwise the 50 Hz that the model
+                # input has notched out dominates the MAD, leaving the real EEG ~16x under-scaled
+                # (near-flat) → the model collapses to a constant BIS. (Matches training intent:
+                # VitalDB was clean, so filter-then-MAD ≈ MAD-then-filter there.)
+                arr = _window_filter(arr[None, :], self._TARGET_FS, _fcfg)[0]
 
                 # Standard MAD fallback
                 mad = float(np.median(np.abs(arr - np.median(arr))))
@@ -320,12 +340,27 @@ class BISPredictor:
         if len(self._buf[0]) < self._WIN_SAMP:
             return float("nan")     # still warming up
 
-        # 4. Extract 4-second window (2, 512)
+        # 4. Extract 4-second window (n_channels, 512)
         window = np.array([list(b) for b in self._buf], dtype=np.float64)
 
-        # 4b. Apply per-session amplitude normalisation (matching training pipeline).
-        # During the first _CALIB_SEC we use a per-window fallback (MAD of current
-        # 4-second slice) so we don't block inference entirely during calibration.
+        # 5. Apply window filters FIRST (highpass + 50/60 Hz notch + lowpass), matching v13
+        #    training preprocessing. Checkpoint config notches 60 Hz (VitalDB / Korea grid);
+        #    live hardware is China 50 Hz, so we notch BOTH (the extra band carries no signal
+        #    on either grid and sits near the 47 Hz lowpass edge → harmless to training align).
+        #
+        #    ORDER MATTERS: filter must precede normalisation. The raw China-grid signal is
+        #    ~99% 50 Hz mains; normalising first sets the MAD scale by the mains, then the notch
+        #    leaves the real EEG ~16x under-scaled (near-flat) → model collapses to a constant
+        #    BIS (~93, the bug we debugged). So: filter → then normalise.
+        filter_cfg = self._get_filter_cfg()
+        try:
+            window = _window_filter(window, self._TARGET_FS, filter_cfg)
+        except Exception as e:
+            logger.warning(f"Filter error: {e}")
+
+        # 6. Per-session amplitude normalisation (matching training), now on the mains-free
+        #    signal. During the first _CALIB_SEC we use a per-window fallback (MAD of the
+        #    current filtered 4-second slice) so inference isn't blocked during calibration.
         if self._calibrated:
             norm = self._norm_scale.astype(np.float64)
         else:
@@ -334,25 +369,6 @@ class BISPredictor:
                 for ch in range(self._n_channels)
             ], dtype=np.float64)
         window = window / norm[:, np.newaxis]
-
-        # 5. Apply window filters (matching v13 training preprocessing: 0.1 Hz highpass).
-        #    The checkpoint config notches 60 Hz (VitalDB was recorded in Korea, 60 Hz grid).
-        #    Live hardware here runs on the China grid (50 Hz), so 50 Hz mains would otherwise
-        #    leak into the model input. Notch BOTH 50 + 60 Hz: the extra band carries no signal
-        #    on either grid (and sits near the 47 Hz lowpass edge), so it's harmless to training
-        #    alignment while removing China mains. (Display chart uses 50 Hz, see DisplayEegFilter.)
-        filter_cfg = dict(self._cfg.get("filters", {
-            "highpass_hz": 0.1, "lowpass_hz": 47.0, "notch_hz": [60.0], "notch_q": 30.0
-        }))
-        _notches = list(filter_cfg.get("notch_hz", [60.0]) or [])
-        for _f in (50.0, 60.0):
-            if _f not in _notches:
-                _notches.append(_f)
-        filter_cfg["notch_hz"] = _notches
-        try:
-            window = _window_filter(window, self._TARGET_FS, filter_cfg)
-        except Exception as e:
-            logger.warning(f"Filter error: {e}")
 
         # 6. SQI + feature extraction
         try:

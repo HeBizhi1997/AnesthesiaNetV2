@@ -94,8 +94,7 @@
                         </StackPanel>
                     </Border>
                     <TextBlock Text="{Binding NowText}" Foreground="{StaticResource MutedBrush}" FontSize="12" VerticalAlignment="Center" Margin="0,0,12,0"/>
-                    <Button Style="{StaticResource SecondaryButton}" Content="截图" Margin="0,0,8,0"/>
-                    <Button Style="{StaticResource SecondaryButton}" Content="设置"/>
+                    <Button Style="{StaticResource SecondaryButton}" Content="▶  数据回放" Command="{Binding OpenPlaybackCommand}"/>
                 </StackPanel>
             </Grid>
         </Border>

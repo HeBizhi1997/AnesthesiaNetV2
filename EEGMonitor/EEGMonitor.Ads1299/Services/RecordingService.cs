@@ -27,6 +27,7 @@ public sealed class RecordingService : IDisposable
 
     private readonly ILogger<RecordingService> _logger;
     private readonly RecordingConfig _cfg;
+    private readonly PatientConfig _patient;
 
     private BinaryWriter? _rawWriter;
     private StreamWriter? _inferenceWriter;
@@ -42,6 +43,17 @@ public sealed class RecordingService : IDisposable
     {
         _logger = logger;
         _cfg = config.Recording;
+        _patient = config.Patient;
+    }
+
+    /// <summary>Make a string safe + bounded for use as a path segment.</summary>
+    private static string SafeSeg(string? s, int maxLen = 40)
+    {
+        if (string.IsNullOrWhiteSpace(s)) return "未填";
+        var invalid = Path.GetInvalidFileNameChars();
+        var cleaned = new string(s.Trim().Select(c => invalid.Contains(c) || c == ' ' ? '_' : c).ToArray());
+        if (cleaned.Length > maxLen) cleaned = cleaned.Substring(0, maxLen);
+        return cleaned.Length == 0 ? "未填" : cleaned;
     }
 
     public void Start(int sampleRate)
@@ -52,7 +64,10 @@ public sealed class RecordingService : IDisposable
         var root = string.IsNullOrWhiteSpace(_cfg.OutputDirectory)
             ? Path.Combine(AppContext.BaseDirectory, "Recordings")
             : _cfg.OutputDirectory;
-        var dir = Path.Combine(root, DateTime.Now.ToString("yyyyMMdd_HHmmss"));
+        // Folder name: 患者名称_住院号_手术名称_开始时间
+        var startTime = DateTime.Now.ToString("yyyyMMdd_HHmmss");
+        var folder = $"{SafeSeg(_patient.Name)}_{SafeSeg(_patient.AdmissionNo)}_{SafeSeg(_patient.SurgeryName)}_{startTime}";
+        var dir = Path.Combine(root, folder);
         Directory.CreateDirectory(dir);
         SessionDirectory = dir;
 

@@ -267,6 +267,13 @@ public partial class MainViewModel : ObservableObject
     }
 
     [RelayCommand]
+    private void OpenPlayback()
+    {
+        var dlg = new PlaybackDialog(_cfg.Recording.OutputDirectory) { Owner = Application.Current?.MainWindow };
+        dlg.ShowDialog();
+    }
+
+    [RelayCommand]
     private void MarkMoment() =>
         CommitEvent(new EventItem { Category = "标记", Name = "标记当前时刻", Dose = "—", Operator = "—", Note = "—" });
 

@@ -224,6 +224,7 @@ class TrainerV3:
             huber_delta=tcfg.get("huber_delta", 0.10),
             bis_transition_weight=tcfg.get("bis_transition_weight", 1.0),
             bis_transition_dbis=tcfg.get("bis_transition_dbis", 0.02),
+            bis_phase_weights=tcfg.get("bis_phase_weights", None),
             focal_gamma=tcfg.get("focal_gamma", 2.0),
             focal_alpha=tcfg.get("focal_alpha", 0.5),
             stim_pos_weight=tcfg.get("stim_pos_weight", 15.0),

@@ -9,6 +9,7 @@ public sealed class AppConfig
     public SerialConfig Serial { get; init; } = new();
     public PythonConfig Python { get; init; } = new();
     public RecordingConfig Recording { get; init; } = new();
+    public PatientConfig Patient { get; init; } = new();
 
     public static AppConfig Load()
     {
@@ -38,6 +39,21 @@ public sealed class SerialConfig
 public sealed class PythonConfig
 {
     public string BaseUrl { get; set; } = "http://localhost:8765/";
+    /// <summary>When true, the app launches EEGProcessingService/main.py itself if /health is offline.</summary>
+    public bool AutoStart { get; set; } = true;
+    /// <summary>Optional explicit folder containing main.py. Empty = auto-locate by walking the tree.</summary>
+    public string ServiceDirectory { get; set; } = "";
+}
+
+public sealed class PatientConfig
+{
+    public string Name { get; set; } = "张三";
+    public string Gender { get; set; } = "男";
+    public int Age { get; set; } = 56;
+    public string AdmissionNo { get; set; } = "--";
+    public string OperatingRoom { get; set; } = "--";
+    public string SurgeryName { get; set; } = "--";
+    public string AnesthesiaMethod { get; set; } = "全身麻醉";
 }
 
 public sealed class RecordingConfig

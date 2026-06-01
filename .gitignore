@@ -86,3 +86,5 @@ _ReSharper*/
 # EEGMonitor session recordings (large binary data, stays local)
 **/Sessions/
 **/EEGMonitor/Logs/
+recordings/
+**/recordings/

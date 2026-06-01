@@ -64,6 +64,7 @@ public sealed class SerialPortService : IDisposable
     private long _framesDecoded;
     private long _dataFramesDecoded;
     private long _samplesEmitted;
+    private bool _loggedFirstBytes;
     private readonly int _streamChannels = STREAM_CHANNELS;
 
     public bool IsConnected => _port?.IsOpen ?? false;
@@ -80,6 +81,7 @@ public sealed class SerialPortService : IDisposable
         if (IsConnected) Disconnect();
         lock (_bufLock) _buffer.Clear();
         _totalBytesIn = _framesDecoded = _dataFramesDecoded = _samplesEmitted = 0;
+        _loggedFirstBytes = false;
         if (sampleRate is 250 or 500 or 1000 or 2000) SampleRate = sampleRate;
 
         try
@@ -90,21 +92,29 @@ public sealed class SerialPortService : IDisposable
                 WriteBufferSize = 4096,
                 ReadTimeout = 500,
                 WriteTimeout = 500,
-                DtrEnable = true,
-                RtsEnable = true,
+                // Vendor LK-M1299 opens with DTR/RTS LOW. Asserting them (true) can hold the
+                // board MCU in reset on this hardware → no stream. Match the vendor: both false.
+                DtrEnable = false,
+                RtsEnable = false,
             };
             _port.DataReceived += OnDataReceived;
             _port.ErrorReceived += OnErrorReceived;
             _port.Open();
 
-            SendFrame(CMD_CONN_STATUS, true, new[] { CONN_CONNECTED });
-            SendSampleParams();
-            SendFrame(CMD_START_STOP, true, new[] { (byte)0x01 });
+            // Vendor start sequence (decompiled): STOP → PARAMS → (settle) → START.
+            SendFrame(CMD_START_STOP, true, new[] { (byte)0x00 });    // stop any prior streaming
+            System.Threading.Thread.Sleep(120);
+            SendSampleParams();                                        // configure rate/gain/ch/mode
+            System.Threading.Thread.Sleep(250);                        // let the device apply + ACK
+            SendFrame(CMD_START_STOP, true, new[] { (byte)0x01 });    // start streaming
 
             _keepAliveTimer = new System.Timers.Timer(1000) { AutoReset = true };
             _keepAliveTimer.Elapsed += (_, _) =>
             {
                 try { SendFrame(CMD_CONN_STATUS, true, new[] { CONN_KEEPALIVE }); } catch { }
+                // Link diagnostic: shows whether ANY bytes/frames are arriving from the port.
+                _logger.LogInformation("ADS1299 link: {Bytes}B in · {Frames} frames · {Data} data frames",
+                    _totalBytesIn, _framesDecoded, _dataFramesDecoded);
             };
             _keepAliveTimer.Start();
 
@@ -173,7 +183,11 @@ public sealed class SerialPortService : IDisposable
         f[1] = (byte)(total & 0xFF);
         f[2] = (byte)((total >> 8) & 0xFF);
         f[3] = ADDR_BROADCAST;
-        f[4] = (byte)(write ? (cmd | WRITE_BIT) : cmd);
+        // R/W bit polarity matches the ACTUAL firmware (decompiled from vendor LK-M1299):
+        // WRITE = command with bit7 CLEAR, READ = command with bit7 SET. This is the OPPOSITE
+        // of what the protocol .docx states. Using the doc's polarity made every START/PARAMS
+        // go out as a READ → the board never started streaming from a cold state.
+        f[4] = (byte)(write ? (cmd & 0x7F) : (cmd | WRITE_BIT));
         f[5] = (byte)(f[1] ^ f[2] ^ f[3] ^ f[4]);
         byte dc = 0;
         for (int i = 0; i < n; i++) { f[6 + i] = data![i]; dc ^= data[i]; }
@@ -191,6 +205,12 @@ public sealed class SerialPortService : IDisposable
             if (available <= 0) return;
             var buf = new byte[available];
             int read = _port.Read(buf, 0, available);
+            if (!_loggedFirstBytes && read > 0)
+            {
+                _loggedFirstBytes = true;
+                var hex = BitConverter.ToString(buf, 0, Math.Min(read, 24));
+                _logger.LogInformation("ADS1299 first bytes ({Read}B): {Hex}", read, hex);
+            }
             lock (_bufLock)
             {
                 _totalBytesIn += read;

@@ -11,6 +11,8 @@ public sealed class ProcessedEEGResult
     [JsonProperty("bis")]  public double BIS { get; set; } = double.NaN;   // → qCON 催眠指数
     [JsonProperty("fnox")] public double? FNox { get; set; }               // → qNOX 伤害感受
     [JsonProperty("sqi")]  public double SQI { get; set; }
+    [JsonProperty("electrode_status")] public string ElectrodeStatus { get; set; } = "ok";  // ok|lead_off|flat|saturated
+    [JsonProperty("signal_valid")]     public bool SignalValid { get; set; } = true;
     [JsonProperty("se")]   public double? StateEntropy { get; set; }
     [JsonProperty("re")]   public double? ResponseEntropy { get; set; }
 

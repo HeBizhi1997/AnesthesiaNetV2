@@ -1,0 +1,51 @@
+<Window x:Class="Ads1299Monitor.Views.EventDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="添加临床事件" Height="430" Width="380"
+        WindowStartupLocation="CenterOwner" ResizeMode="NoResize"
+        Background="{StaticResource PanelBrush}" FontFamily="Microsoft YaHei UI">
+    <Grid Margin="18">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/><RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+        <Grid.Resources>
+            <Style TargetType="TextBlock"><Setter Property="Foreground" Value="{StaticResource MutedBrush}"/><Setter Property="Margin" Value="0,10,0,4"/></Style>
+            <Style TargetType="TextBox"><Setter Property="Padding" Value="6,5"/><Setter Property="FontSize" Value="13"/></Style>
+        </Grid.Resources>
+
+        <TextBlock Grid.Row="0" Text="事件类型"/>
+        <ComboBox Grid.Row="1" x:Name="CategoryBox" SelectedIndex="0" FontSize="13" Padding="6,5">
+            <ComboBoxItem Content="用药"/><ComboBoxItem Content="电刀"/><ComboBoxItem Content="喉镜"/>
+            <ComboBoxItem Content="气管插管"/><ComboBoxItem Content="缝合"/><ComboBoxItem Content="体位/翻身"/>
+            <ComboBoxItem Content="其他"/>
+        </ComboBox>
+
+        <TextBlock Grid.Row="2" Text="名称 / 药物"/>
+        <TextBox Grid.Row="3" x:Name="NameBox"/>
+
+        <Grid Grid.Row="4">
+            <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="12"/><ColumnDefinition/></Grid.ColumnDefinitions>
+            <StackPanel Grid.Column="0">
+                <TextBlock Text="剂量 / 参数"/>
+                <TextBox x:Name="DoseBox"/>
+            </StackPanel>
+            <StackPanel Grid.Column="2">
+                <TextBlock Text="操作者"/>
+                <TextBox x:Name="OperatorBox"/>
+            </StackPanel>
+        </Grid>
+
+        <StackPanel Grid.Row="5">
+            <TextBlock Text="备注"/>
+            <TextBox x:Name="NoteBox" AcceptsReturn="True" TextWrapping="Wrap" Height="60" VerticalScrollBarVisibility="Auto"/>
+        </StackPanel>
+
+        <StackPanel Grid.Row="6" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,16,0,0">
+            <Button Content="取消" Width="78" Height="32" Margin="0,0,10,0" Click="Cancel_Click" Style="{StaticResource SecondaryButton}"/>
+            <Button Content="确定" Width="78" Height="32" Click="Ok_Click" Style="{StaticResource StartButton}"/>
+        </StackPanel>
+    </Grid>
+</Window>

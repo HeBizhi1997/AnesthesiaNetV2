@@ -22,6 +22,8 @@ class ProcessResponse(BaseModel):
     eeg_amplitude_uv: float = 0.0      # CH0 filtered std [µV]  — expect 15-80 µV for real EEG
     eeg_dominant_hz: float = 0.0       # frequency with most power in 4-45 Hz band
     eeg_tonal_ratio: float = 0.0       # fraction of power in ±2 Hz around dominant peak (>0.4 = interference)
+    electrode_status: str = "ok"       # ok | lead_off | flat | saturated
+    signal_valid: bool = True          # False ⇒ indices (qCON/qNOX/SQI) not trustworthy
 
     # EEG components
     raw_eeg: list[float] = []

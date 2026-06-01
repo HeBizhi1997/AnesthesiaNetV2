@@ -30,8 +30,10 @@ public sealed class RecordingService : IDisposable
 
     private BinaryWriter? _rawWriter;
     private StreamWriter? _inferenceWriter;
+    private StreamWriter? _eventWriter;
     private readonly object _rawLock = new();
     private readonly object _infLock = new();
+    private readonly object _evtLock = new();
 
     public bool IsRecording { get; private set; }
     public string? SessionDirectory { get; private set; }
@@ -56,6 +58,7 @@ public sealed class RecordingService : IDisposable
 
         _rawWriter = new BinaryWriter(File.Open(Path.Combine(dir, "raw_signal.bin"), FileMode.Create));
         _inferenceWriter = new StreamWriter(Path.Combine(dir, "inference.jsonl"), append: false);
+        _eventWriter = new StreamWriter(Path.Combine(dir, "events.jsonl"), append: false);
 
         File.WriteAllText(Path.Combine(dir, "raw_signal.meta.json"), JsonConvert.SerializeObject(new
         {
@@ -75,6 +78,7 @@ public sealed class RecordingService : IDisposable
         IsRecording = false;
         lock (_rawLock) { _rawWriter?.Flush(); _rawWriter?.Dispose(); _rawWriter = null; }
         lock (_infLock) { _inferenceWriter?.Flush(); _inferenceWriter?.Dispose(); _inferenceWriter = null; }
+        lock (_evtLock) { _eventWriter?.Flush(); _eventWriter?.Dispose(); _eventWriter = null; }
         _logger.LogInformation("Recording stopped → {Dir}", SessionDirectory);
     }
 
@@ -130,6 +134,19 @@ public sealed class RecordingService : IDisposable
         };
         var line = JsonConvert.SerializeObject(compact);
         lock (_infLock) { w.WriteLine(line); }
+    }
+
+    /// <summary>Clinical event annotation (用药 / 电刀 / 喉镜 / 缝合 / 翻身 …).</summary>
+    public void RecordEvent(EventItem ev)
+    {
+        var w = _eventWriter;
+        if (!IsRecording || w == null) return;
+        var line = JsonConvert.SerializeObject(new
+        {
+            t = DateTime.Now.ToString("o"),
+            ev.Time, ev.Category, ev.Name, ev.Dose, ev.Operator, ev.Note,
+        });
+        lock (_evtLock) { w.WriteLine(line); }
     }
 
     public void Dispose() => Stop();

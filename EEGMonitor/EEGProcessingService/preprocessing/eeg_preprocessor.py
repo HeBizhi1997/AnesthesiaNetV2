@@ -63,6 +63,11 @@ class EEGPreprocessor:
     # Seconds of filtered EEG to buffer for stable Welch PSD (4s matches BIS buffer)
     PSD_BUFFER_SEC = 4.0
 
+    # Electrode/lead-off thresholds on RAW std (µV). Physiological scalp EEG ≈ 5–150 µV.
+    # A floating (unconnected) high-impedance input rails to ~10⁴ µV; a shorted one goes flat.
+    LEAD_OFF_UV = 1500.0   # raw std above this ⇒ 电极未接入/导联脱落
+    FLAT_UV     = 0.5      # raw std below this ⇒ 无信号(短路/断开)
+
     # Eye-blink rejection — applied to ENERGY estimates only (band-power ratios + DSA).
     # Blinks are large, slow (<~5 Hz) ocular transients that dump huge energy into the
     # delta band and dominate the band-power ratio (δ can read 80%+ while the patient is
@@ -173,6 +178,21 @@ class EEGPreprocessor:
 
         amplitude_uv, dominant_hz, tonal_ratio = self._signal_diagnostics(filtered)
 
+        # Electrode / lead-off determination. A floating (unconnected) high-impedance input
+        # rails into huge full-scale noise (std ~10⁴+ µV); a shorted/disconnected input goes
+        # flat (~0 µV). Physiological scalp EEG sits ~5–150 µV. We judge on the RAW std so the
+        # filter can't mask a floating electrode. Downstream (qCON/qNOX/SQI) is invalid unless OK.
+        raw_std = float(hw_diag["raw_std_uv"])
+        if hw_diag["is_saturated"]:
+            electrode_status = "saturated"      # 信号饱和/削顶
+        elif raw_std > self.LEAD_OFF_UV:
+            electrode_status = "lead_off"        # 电极未接入/导联脱落(悬空满幅噪声)
+        elif raw_std < self.FLAT_UV or amplitude_uv < 0.3:
+            electrode_status = "flat"            # 无信号(短路/断开,近平线)
+        else:
+            electrode_status = "ok"
+        signal_valid = electrode_status == "ok"
+
         # 7. Cross-validate with device band powers if available.
         #    When the NSM signed-byte ADC is clipping (>5% of samples at ±127 µV),
         #    the pipeline's Welch PSD is computed from a distorted waveform and its
@@ -236,6 +256,9 @@ class EEGPreprocessor:
             "eeg_amplitude_uv": amplitude_uv,
             "eeg_dominant_hz":  dominant_hz,
             "eeg_tonal_ratio":  tonal_ratio,
+            # Electrode / lead-off status: ok | lead_off | flat | saturated
+            "electrode_status": electrode_status,
+            "signal_valid":     signal_valid,
             # Hardware diagnostics for UI display / debugging
             "hw_clipping_pct":      hw_diag["clipping_pct"],
             "hw_dc_offset_uv":      hw_diag["dc_offset_uv"],
@@ -490,6 +513,7 @@ class EEGPreprocessor:
             "dsa_matrix": [], "dsa_frequencies": [], "dsa_times": [],
             "sqi": 0.0,
             "eeg_amplitude_uv": 0.0, "eeg_dominant_hz": 0.0, "eeg_tonal_ratio": 0.0,
+            "electrode_status": "flat", "signal_valid": False,
             "hw_clipping_pct": 0.0, "hw_dc_offset_uv": 0.0,
             "hw_is_saturated": False, "hw_adc_range_uv": 0.0,
             "device_delta_ratio": None, "device_delta_discrepancy": None,

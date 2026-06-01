@@ -43,6 +43,7 @@ public partial class App : Application
             sc.AddSingleton<SerialPortService>();
             sc.AddSingleton<PulseSerialService>();
             sc.AddSingleton<RecordingService>();
+            sc.AddSingleton<PythonServiceLauncher>();
             sc.AddSingleton<DataPipeline>();
             sc.AddSingleton<MainViewModel>();
 

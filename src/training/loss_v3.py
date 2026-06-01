@@ -166,6 +166,8 @@ class MultiTaskLossV3(nn.Module):
         huber_delta:          float = 0.05,  # 理论 §2.6：δ=5 BIS pts（归一化空间 0.05）
         bis_transition_weight: float = 1.0,  # v14: 过渡区 L_bis 权重放大（>1 启用），打击诱导/复苏 2× 误差
         bis_transition_dbis:   float = 0.02, # v14: |Δlabel/步| 阈值（0.02≈2 BIS/s），超过即过渡区
+        bis_phase_weights: Optional[list] = None,  # v15: 相位平衡 L_bis 权重 [pre_op,ind,maint,rec]
+                                                   #      None→[1,1,1,1] 无操作；maintenance 基准 1.0
         focal_gamma:          float = 2.0,
         focal_alpha:          float = 0.5,    # v8 validated; 0.99→9801:1 gradient ratio (broken)
         stim_pos_weight:      float = 15.0,   # v8 validated; 99→9801:1 gradient ratio (broken)
@@ -201,6 +203,13 @@ class MultiTaskLossV3(nn.Module):
         self.auto_weight_temp     = auto_weight_temp
 
         self.register_buffer("phase_weights", _PHASE_WEIGHTS)
+
+        # v15: 相位平衡 L_bis 权重 —— 针对 maintenance(97%) 主导导致的输出区间坍缩
+        # （诊断 diag_preop：pre_op/induction/recovery 系统性欠预测，预测 p99 仅 81）。
+        _bpw = torch.tensor(
+            bis_phase_weights if bis_phase_weights is not None else [1.0, 1.0, 1.0, 1.0],
+            dtype=torch.float32)
+        self.register_buffer("bis_phase_weights", _bpw)
 
     def get_curriculum_phase(self, epoch: int) -> int:
         """返回课程阶段（1/2/3）。"""
@@ -244,20 +253,30 @@ class MultiTaskLossV3(nn.Module):
         B, T = label_bis.shape
         cur_phase = self.get_curriculum_phase(epoch)
 
-        # ── 1. L_bis：SQI 遮掩 + 过渡区加权 Huber ──────────────────────────────
-        # 逐元素 Huber，权重 = SQI掩码 ×（过渡区放大）。
-        # 过渡区由标签自身斜率 |Δlabel| 定义（不依赖常缺失的药物数据），
-        # 直接针对 v13 诊断的诱导/复苏高误差区（vInd/vRec ~9-10 = 整体 2×）。
+        # ── 1. L_bis：SQI 遮掩 + 相位平衡 + 过渡区加权 Huber ─────────────────────
+        # 逐元素 Huber，权重 = SQI掩码 × max(相位平衡, 过渡区放大)。
+        #   · 过渡区(velocity)：|Δlabel| 斜率，针对诱导/复苏陡变段（v14）。
+        #   · 相位平衡(v15)：按相位上采样 pre_op/诱导/复苏，修复 maintenance(97%)
+        #     主导造成的输出区间坍缩（diag_preop：这些相位系统性欠预测 14/4/9 BIS）。
+        #   两者取 max 而非相乘，避免诱导陡变段权重爆炸（6×3=18）。
         sqi_ok  = (sqi_mean > 0.5).float()
         pred_sq = pred_bis.squeeze(-1)
         huber_el = F.huber_loss(
             pred_sq, label_bis, delta=self.huber_delta, reduction="none")  # (B, T)
-        w_bis = sqi_ok
+
+        # 速度型过渡权重
         if self.bis_transition_weight > 1.0 and T > 1:
             dlabel = torch.zeros_like(label_bis)
             dlabel[:, 1:] = (label_bis[:, 1:] - label_bis[:, :-1]).abs()
             is_trans = (dlabel > self.bis_transition_dbis).float()
-            w_bis = w_bis * (1.0 + (self.bis_transition_weight - 1.0) * is_trans)
+            w_trans = 1.0 + (self.bis_transition_weight - 1.0) * is_trans
+        else:
+            w_trans = torch.ones_like(label_bis)
+
+        # 相位平衡权重（phase_labels:(B,T) int{0..3}）
+        w_phase = self.bis_phase_weights.to(label_bis.device)[phase_labels.clamp(0, 3)]
+
+        w_bis = sqi_ok * torch.maximum(w_phase, w_trans)
         bis_err = (huber_el * w_bis).sum() / (w_bis.sum() + 1e-6)
 
         # ── 2. L_phase：加权交叉熵 ───────────────────────────────────────────

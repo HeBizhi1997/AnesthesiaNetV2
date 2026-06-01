@@ -27,8 +27,8 @@
     <!-- MVVM -->
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.2.2" />
 
-    <!-- Charts -->
-    <PackageReference Include="OxyPlot.Wpf" Version="2.1.2" />
+    <!-- Charts: LiveCharts2 (SkiaSharp, GPU-accelerated) -->
+    <PackageReference Include="LiveChartsCore.SkiaSharpView.WPF" Version="2.0.0" />
 
     <!-- Serial Port -->
     <PackageReference Include="System.IO.Ports" Version="8.0.0" />

@@ -175,6 +175,8 @@ async def process_eeg(req: ProcessRequest):
         eeg_amplitude_uv=eeg_result.get("eeg_amplitude_uv", 0.0),
         eeg_dominant_hz=eeg_result.get("eeg_dominant_hz", 0.0),
         eeg_tonal_ratio=eeg_result.get("eeg_tonal_ratio", 0.0),
+        electrode_status=eeg_result.get("electrode_status", "ok"),
+        signal_valid=eeg_result.get("signal_valid", True),
         raw_eeg=eeg_result["raw_eeg"],
         filtered_eeg=eeg_result["filtered_eeg"],
         delta_wave=eeg_result["delta_wave"],

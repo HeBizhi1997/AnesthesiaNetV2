@@ -34,6 +34,11 @@ public sealed class SerialConfig
     public bool EegDifferential { get; set; } = true;
     public bool PulseEnabled { get; set; } = false;
     public string PulsePort { get; set; } = "COM5";
+
+    // PPG / 血氧指夹模组 (CH340) — 提供 SpO₂、PR(脉率)、PRV(脉率变异性)、PI(灌注指数)
+    public bool PpgEnabled { get; set; } = true;
+    public string PpgPort { get; set; } = "COM7";
+    public int PpgBaud { get; set; } = 57600;
 }
 
 public sealed class PythonConfig

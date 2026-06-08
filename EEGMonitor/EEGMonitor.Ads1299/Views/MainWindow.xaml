@@ -217,12 +217,12 @@
                                 <Style TargetType="ctrl:Sparkline"><Setter Property="Width" Value="110"/><Setter Property="Margin" Value="6,0"/></Style>
                             </Grid.Resources>
 
-                            <!-- HR -->
+                            <!-- PR (脉率, from PPG 指夹模组) -->
                             <Grid Grid.Row="0">
                                 <Grid.ColumnDefinitions><ColumnDefinition Width="86"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="28"/></Grid.ColumnDefinitions>
-                                <StackPanel Grid.Column="0" VerticalAlignment="Center"><TextBlock Text="HR" Foreground="{StaticResource AlphaBrush}" FontWeight="Bold"/><TextBlock Text="心率" Foreground="{StaticResource MutedBrush}" FontSize="10"/></StackPanel>
-                                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center"><TextBlock Text="{Binding HrText}" Foreground="{StaticResource AlphaBrush}" FontSize="34" FontWeight="Bold"/><TextBlock Text="bpm" Foreground="{StaticResource MutedBrush}" FontSize="11" VerticalAlignment="Bottom" Margin="4,0,0,6"/></StackPanel>
-                                <ctrl:Sparkline Grid.Column="2" Values="{Binding HrSpark}" Stroke="{StaticResource AlphaBrush}"/>
+                                <StackPanel Grid.Column="0" VerticalAlignment="Center"><TextBlock Text="PR" Foreground="{StaticResource AlphaBrush}" FontWeight="Bold"/><TextBlock Text="脉率" Foreground="{StaticResource MutedBrush}" FontSize="10"/></StackPanel>
+                                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center"><TextBlock Text="{Binding PrText}" Foreground="{StaticResource AlphaBrush}" FontSize="34" FontWeight="Bold"/><TextBlock Text="bpm" Foreground="{StaticResource MutedBrush}" FontSize="11" VerticalAlignment="Bottom" Margin="4,0,0,6"/></StackPanel>
+                                <ctrl:Sparkline Grid.Column="2" Values="{Binding PrSpark}" Stroke="{StaticResource AlphaBrush}"/>
                                 <StackPanel Grid.Column="3" VerticalAlignment="Center"><TextBlock Text="160" Foreground="{StaticResource MutedBrush}" FontSize="9"/><TextBlock Text="40" Foreground="{StaticResource MutedBrush}" FontSize="9" Margin="0,14,0,0"/></StackPanel>
                             </Grid>
                             <!-- SPO2 -->
@@ -233,12 +233,12 @@
                                 <ctrl:Sparkline Grid.Column="2" Values="{Binding Spo2Spark}" Stroke="{StaticResource ThetaBrush}"/>
                                 <StackPanel Grid.Column="3" VerticalAlignment="Center"><TextBlock Text="100" Foreground="{StaticResource MutedBrush}" FontSize="9"/><TextBlock Text="90" Foreground="{StaticResource MutedBrush}" FontSize="9" Margin="0,14,0,0"/></StackPanel>
                             </Grid>
-                            <!-- HRV -->
+                            <!-- PRV (脉率变异性, from PPG 指夹模组) -->
                             <Grid Grid.Row="2">
                                 <Grid.ColumnDefinitions><ColumnDefinition Width="86"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="28"/></Grid.ColumnDefinitions>
-                                <StackPanel Grid.Column="0" VerticalAlignment="Center"><TextBlock Text="HRV" Foreground="#FF22D3EE" FontWeight="Bold"/><TextBlock Text="心率变异性" Foreground="{StaticResource MutedBrush}" FontSize="10"/></StackPanel>
-                                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center"><TextBlock Text="{Binding HrvText}" Foreground="#FF22D3EE" FontSize="34" FontWeight="Bold"/><TextBlock Text="ms" Foreground="{StaticResource MutedBrush}" FontSize="11" VerticalAlignment="Bottom" Margin="4,0,0,6"/></StackPanel>
-                                <ctrl:Sparkline Grid.Column="2" Values="{Binding HrvSpark}" Stroke="#FF22D3EE"/>
+                                <StackPanel Grid.Column="0" VerticalAlignment="Center"><TextBlock Text="PRV" Foreground="#FF22D3EE" FontWeight="Bold"/><TextBlock Text="脉率变异性" Foreground="{StaticResource MutedBrush}" FontSize="10"/></StackPanel>
+                                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center"><TextBlock Text="{Binding PrvText}" Foreground="#FF22D3EE" FontSize="34" FontWeight="Bold"/><TextBlock Text="ms" Foreground="{StaticResource MutedBrush}" FontSize="11" VerticalAlignment="Bottom" Margin="4,0,0,6"/></StackPanel>
+                                <ctrl:Sparkline Grid.Column="2" Values="{Binding PrvSpark}" Stroke="#FF22D3EE"/>
                                 <StackPanel Grid.Column="3" VerticalAlignment="Center"><TextBlock Text="100" Foreground="{StaticResource MutedBrush}" FontSize="9"/><TextBlock Text="0" Foreground="{StaticResource MutedBrush}" FontSize="9" Margin="0,14,0,0"/></StackPanel>
                             </Grid>
                             <!-- NIBP -->
@@ -354,7 +354,7 @@
                                 <CheckBox Content="qCON" IsChecked="True" Foreground="#FF3B82F6" Margin="6,0"/>
                                 <CheckBox Content="qNOX" IsChecked="True" Foreground="#FFF59E0B" Margin="6,0"/>
                                 <CheckBox Content="SQI" IsChecked="True" Foreground="#FF22C55E" Margin="6,0"/>
-                                <CheckBox Content="HR" IsChecked="True" Foreground="#FFEF4444" Margin="6,0"/>
+                                <CheckBox Content="PR" IsChecked="True" Foreground="#FFEF4444" Margin="6,0"/>
                                 <CheckBox Content="SPO₂" Foreground="#FF38BDF8" Margin="6,0"/>
                             </StackPanel>
                         </DockPanel>

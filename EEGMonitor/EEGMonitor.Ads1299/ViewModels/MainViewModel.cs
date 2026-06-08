@@ -24,6 +24,7 @@ public partial class MainViewModel : ObservableObject
     private readonly AppConfig _cfg;
     private readonly SerialPortService _serial;
     private readonly PulseSerialService _pulse;
+    private readonly PpgSerialService _ppg;
     private readonly DataPipeline _pipeline;
     private readonly RecordingService _recording;
     private readonly EEGProcessingClient _processing;
@@ -56,20 +57,21 @@ public partial class MainViewModel : ObservableObject
     [ObservableProperty] private string _noDataText = "";
     private DateTime _lastDataAt;
 
-    // ── Vitals ──
-    [ObservableProperty] private string _hrText = "--";
+    // ── Vitals (PR/SpO₂/PRV/PI come from the PPG 指夹模组; NIBP/RR have no source yet) ──
+    [ObservableProperty] private string _prText = "--";        // 脉率 PR (was HR)
     [ObservableProperty] private string _spo2Text = "--";
-    [ObservableProperty] private string _hrvText = "--";
+    [ObservableProperty] private string _prvText = "--";       // 脉率变异性 PRV (was HRV)
     [ObservableProperty] private string _nibpText = "-- / --";
     [ObservableProperty] private string _mapText = "MAP --";
     [ObservableProperty] private string _rrText = "--";
     [ObservableProperty] private string _tpiText = "--";
-    [ObservableProperty] private IReadOnlyList<double>? _hrSpark;
+    [ObservableProperty] private IReadOnlyList<double>? _prSpark;
     [ObservableProperty] private IReadOnlyList<double>? _spo2Spark;
-    [ObservableProperty] private IReadOnlyList<double>? _hrvSpark;
+    [ObservableProperty] private IReadOnlyList<double>? _prvSpark;
     [ObservableProperty] private IReadOnlyList<double>? _rrSpark;
     [ObservableProperty] private IReadOnlyList<double>? _tpiSpark;
-    private readonly List<double> _hrRoll = new(), _hrvRoll = new();
+    private readonly List<double> _prRoll = new(), _prvRoll = new(), _spo2Roll = new(), _piRoll = new();
+    private double _lastPr, _lastSpo2;     // latest PPG values for trend sampling (aligned to _t)
 
     // ── Indices ──
     [ObservableProperty] private string _qConStatus = "--";
@@ -122,10 +124,10 @@ public partial class MainViewModel : ObservableObject
     private static readonly string[] LaneHex = { "#E2E8F0", "#3B82F6", "#06B6D4", "#22C55E", "#F59E0B", "#A855F7" };
 
     public MainViewModel(AppConfig cfg, SerialPortService serial, PulseSerialService pulse,
-        DataPipeline pipeline, RecordingService recording, EEGProcessingClient processing,
+        PpgSerialService ppg, DataPipeline pipeline, RecordingService recording, EEGProcessingClient processing,
         PythonServiceLauncher launcher, ILogger<MainViewModel> logger)
     {
-        _cfg = cfg; _serial = serial; _pulse = pulse; _pipeline = pipeline;
+        _cfg = cfg; _serial = serial; _pulse = pulse; _ppg = ppg; _pipeline = pipeline;
         _recording = recording; _processing = processing; _launcher = launcher; _logger = logger;
 
         var p = cfg.Patient;
@@ -153,7 +155,7 @@ public partial class MainViewModel : ObservableObject
             TrendLine(_trQnox, "qNOX", "#F59E0B", 0),
             TrendLine(_trSqi,  "SQI",  "#22C55E", 0),
             TrendLine(_trSpo2, "SpO₂", "#38BDF8", 0),
-            TrendLine(_trHr,   "HR",   "#EF4444", 1),
+            TrendLine(_trHr,   "PR",   "#EF4444", 1),
         };
         // Trend X = wall-clock time axis (aligns data + event markers for intuitive review)
         TrendXAxes = new[]
@@ -187,6 +189,7 @@ public partial class MainViewModel : ObservableObject
         _serial.ConnectionStatusChanged += s => OnUi(() => MonitorStatusText = s);
         _pipeline.ResultAvailable += r => OnUi(() => OnResult(r));
         _pulse.BpmReceived += OnBpm;
+        _ppg.ReadingReceived += OnPpg;
 
         _clock = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
         _clock.Tick += (_, _) =>
@@ -242,6 +245,8 @@ public partial class MainViewModel : ObservableObject
         { RecordFileName = Path.GetFileName(dir); StoragePath = dir; UpdateFreeSpace(dir); }
         _pipeline.Start();
         if (_cfg.Serial.PulseEnabled) _pulse.Connect(_cfg.Serial.PulsePort);
+        if (_cfg.Serial.PpgEnabled && !_ppg.Connect(_cfg.Serial.PpgPort, _cfg.Serial.PpgBaud))
+            _logger.LogWarning("PPG 模组 {Port} 打开失败 —— 脉率/血氧将无数据", _cfg.Serial.PpgPort);
         _startedAt = DateTime.Now; _lastDataAt = DateTime.Now; IsRunning = true;
         StartButtonText = "■  停止监测"; MonitorStatusText = "监测中";
     }
@@ -250,6 +255,7 @@ public partial class MainViewModel : ObservableObject
     {
         _pipeline.Stop(); _recording.Stop(); _serial.Disconnect();
         if (_pulse.IsConnected) _pulse.Disconnect();
+        if (_ppg.IsConnected) _ppg.Disconnect();
         IsRunning = false; StartButtonText = "▶  开始监测"; MonitorStatusText = "已停止";
         ElectrodeAlertVisible = false; ElectrodeAlert = "";
         NoDataVisible = false; NoDataText = "";
@@ -323,9 +329,7 @@ public partial class MainViewModel : ObservableObject
         SqiText = valid ? $"{Math.Round(r.SQI)}" : "--";
         SqiQuality = valid ? QualityStatus(r.SQI) : "无效";
 
-        if (r.HeartRate is > 0) { HrText = Math.Round(r.HeartRate.Value).ToString("0"); Push(_hrRoll, r.HeartRate.Value, v => HrSpark = v); }
-        if (r.HRV_RMSSD is > 0) { HrvText = $"{r.HRV_RMSSD.Value:0}"; Push(_hrvRoll, r.HRV_RMSSD.Value, v => HrvSpark = v); }
-        if (r.SpO2 is > 0) Spo2Text = $"{Math.Round(r.SpO2.Value)}";
+        // 脉率 PR / SpO₂ / PRV / 灌注指数 now come from the PPG 指夹模组 (see OnPpg); not the EEG result.
 
         double tot = r.DeltaPower + r.ThetaPower + r.AlphaPower + r.BetaPower + r.GammaPower; if (tot <= 0) tot = 1;
         double d = r.DeltaPower / tot, th = r.ThetaPower / tot, al = r.AlphaPower / tot, b = r.BetaPower / tot, g = r.GammaPower / tot;
@@ -338,13 +342,31 @@ public partial class MainViewModel : ObservableObject
         if (valid && !double.IsNaN(r.BIS)) AddTrend(_trQcon, r.BIS);
         if (valid && r.FNox.HasValue) AddTrend(_trQnox, r.FNox.Value);
         AddTrend(_trSqi, r.SQI);
-        if (r.HeartRate is > 0) AddTrend(_trHr, r.HeartRate.Value);
-        if (r.SpO2 is > 0) AddTrend(_trSpo2, r.SpO2.Value);
+        if (_lastPr > 0) AddTrend(_trHr, _lastPr);           // PR (脉率) from PPG, sampled at the EEG epoch tick
+        if (_lastSpo2 > 0) AddTrend(_trSpo2, _lastSpo2);
     }
 
+    // ── PPG 指夹模组: 脉率 PR + 脉率变异性 PRV + 血氧 SpO₂ + 灌注指数 PI ──
+    private void OnPpg(PpgSerialService.PpgReading r)
+    {
+        double pr = r.Pr > 0 ? r.Pr : r.DeviceHr;            // computed PR; fall back to device reading
+        OnUi(() =>
+        {
+            if (pr > 0) { PrText = Math.Round(pr).ToString("0"); Push(_prRoll, pr, v => PrSpark = v); }
+            if (r.Spo2 > 0) { Spo2Text = r.Spo2.ToString(); Push(_spo2Roll, r.Spo2, v => Spo2Spark = v); }
+            if (r.Prv > 0) { PrvText = $"{r.Prv:0}"; Push(_prvRoll, r.Prv, v => PrvSpark = v); }
+            if (r.Pi > 0) { TpiText = $"{r.Pi:0.0}"; Push(_piRoll, r.Pi, v => TpiSpark = v); }
+            _lastPr = pr; _lastSpo2 = r.Spo2;
+        });
+        if (pr > 0) _pipeline.CurrentHeartRate = (int)Math.Round(pr);
+        _recording.RecordRawVital(r.Time, pr, r.Spo2, r.Pi);
+    }
+
+    // Legacy HKG-07D pulse sensor (PulseEnabled=false by default). When active and no PPG
+    // module is present, it can still drive the PR display.
     private void OnBpm(int bpm)
     {
-        OnUi(() => { if (bpm > 0) { HrText = bpm.ToString(); _pipeline.CurrentHeartRate = bpm; Push(_hrRoll, bpm, v => HrSpark = v); } });
+        OnUi(() => { if (bpm > 0) { PrText = bpm.ToString(); _pipeline.CurrentHeartRate = bpm; Push(_prRoll, bpm, v => PrSpark = v); _lastPr = bpm; } });
         if (bpm > 0) _recording.RecordRawVital(DateTime.Now, bpm, 0, 0);
     }
 

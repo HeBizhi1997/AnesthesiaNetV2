@@ -42,12 +42,14 @@ public sealed class PpgSerialService : IDisposable
     private double _fs = 125.0;
     private DateTime _t0;
     private long _framesIn;
+    private double _prvEma;     // smoothed PRV (kills residual 毛刺 after artifact rejection)
 
     public bool IsConnected => _port?.IsOpen ?? false;
     public string PortName => _port?.PortName ?? string.Empty;
 
     public event Action<PpgReading>? ReadingReceived;
     public event Action<string>? ConnectionStatusChanged;
+    public event Action<DateTime, int, int>? RawSampleReceived;   // 每帧原始 IR/RED(供无损录制 / 离线诊断)
 
     public PpgSerialService(ILogger<PpgSerialService> logger) => _logger = logger;
 
@@ -57,7 +59,7 @@ public sealed class PpgSerialService : IDisposable
         lock (_lock)
         {
             _buffer.Clear(); _irCount = 0; _samplesSinceAnalyse = 0;
-            _framesIn = 0; _fs = 125.0; _lastSpo2 = _lastHr = 0;
+            _framesIn = 0; _fs = 125.0; _lastSpo2 = _lastHr = 0; _prvEma = 0;
         }
         try
         {
@@ -105,19 +107,23 @@ public sealed class PpgSerialService : IDisposable
             if (avail <= 0) return;
             var buf = new byte[avail];
             int read = port.Read(buf, 0, avail);
-            PpgReading? emit = null;
+            var raws = new List<(DateTime ts, int ir, int red)>(read / FRAME + 1);
+            PpgReading? emit;
             lock (_lock)
             {
                 for (int i = 0; i < read; i++) _buffer.Add(buf[i]);
-                emit = ProcessBuffer();
+                emit = ProcessBuffer(raws);
             }
+            // Invoke handlers OUTSIDE the lock (recording I/O / UI marshaling).
+            if (RawSampleReceived != null)
+                foreach (var s in raws) RawSampleReceived(s.ts, s.ir, s.red);
             if (emit != null) ReadingReceived?.Invoke(emit);
         }
         catch (Exception ex) { _logger.LogWarning(ex, "Error reading PPG data"); }
     }
 
-    /// <summary>Consume whole frames; returns a reading if an analysis tick fired.</summary>
-    private PpgReading? ProcessBuffer()
+    /// <summary>Consume whole frames (collecting raw IR/RED); returns a reading if an analysis tick fired.</summary>
+    private PpgReading? ProcessBuffer(List<(DateTime ts, int ir, int red)> raws)
     {
         PpgReading? result = null;
         int i = 0, n = _buffer.Count;
@@ -125,9 +131,11 @@ public sealed class PpgSerialService : IDisposable
         {
             if (_buffer[i] == H0 && _buffer[i + 1] == H1 && _buffer[i + 16] == TAIL)
             {
-                int ir = _buffer[i + 5] | (_buffer[i + 6] << 8) | (_buffer[i + 7] << 16) | (_buffer[i + 8] << 24);
+                int ir  = _buffer[i + 5] | (_buffer[i + 6] << 8) | (_buffer[i + 7] << 16) | (_buffer[i + 8] << 24);
+                int red = _buffer[i + 9] | (_buffer[i + 10] << 8) | (_buffer[i + 11] << 16) | (_buffer[i + 12] << 24);
                 int spo2 = _buffer[i + 13];
                 int hr = _buffer[i + 14];
+                raws.Add((DateTime.Now, ir, red));
                 var r = OnFrame(ir, spo2, hr);
                 if (r != null) result = r;     // at most one tick per buffer chunk
                 i += FRAME;
@@ -230,13 +238,35 @@ public sealed class PpgSerialService : IDisposable
             if (ms is > 300 and < 2000) ibis.Add(ms);
         }
 
+        // Artifact-robust PR / PRV. A missed or extra beat makes one IBI ≈ 2× (or ½) its
+        // neighbours; left in, that single outlier produces a huge RMSSD spike (毛刺). So:
+        //   • PR  = mean of IBIs within ±30 % of the median (drop missed/extra beats).
+        //   • PRV = RMSSD over successive ACCEPTED pairs whose |Δ| is plausible (<200 ms),
+        //           then EMA-smoothed. This is standard HRV/PRV artifact correction.
         double pr = 0, prv = 0;
         if (ibis.Count >= 2)
         {
-            double sum = 0; foreach (var v in ibis) sum += v;
-            pr = 60000.0 / (sum / ibis.Count);
-            double sq = 0; for (int k = 1; k < ibis.Count; k++) { double d = ibis[k] - ibis[k - 1]; sq += d * d; }
-            prv = Math.Sqrt(sq / (ibis.Count - 1));               // RMSSD
+            var sortedIbi = new List<double>(ibis); sortedIbi.Sort();
+            double med = sortedIbi[sortedIbi.Count / 2];
+            var accepted = new bool[ibis.Count];
+            double sum = 0; int cnt = 0;
+            for (int k = 0; k < ibis.Count; k++)
+                if (Math.Abs(ibis[k] - med) <= 0.30 * med) { accepted[k] = true; sum += ibis[k]; cnt++; }
+            if (cnt > 0) pr = 60000.0 / (sum / cnt);
+
+            double sq = 0; int dn = 0;
+            for (int k = 1; k < ibis.Count; k++)
+            {
+                if (!accepted[k] || !accepted[k - 1]) continue;
+                double d = ibis[k] - ibis[k - 1];
+                if (Math.Abs(d) < 200) { sq += d * d; dn++; }
+            }
+            if (dn >= 1)
+            {
+                double rmssd = Math.Sqrt(sq / dn);
+                _prvEma = _prvEma <= 0 ? rmssd : 0.5 * _prvEma + 0.5 * rmssd;
+                prv = _prvEma;
+            }
         }
 
         // Perfusion index = AC peak-to-peak (5–95th pct, robust) / DC.

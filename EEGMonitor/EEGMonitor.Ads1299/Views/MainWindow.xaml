@@ -214,31 +214,45 @@
                                 <RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/>
                             </Grid.RowDefinitions>
                             <Grid.Resources>
-                                <Style TargetType="ctrl:Sparkline"><Setter Property="Width" Value="110"/><Setter Property="Margin" Value="6,0"/></Style>
+                                <!-- No fixed Width → the sparkline stretches to fill its * column and
+                                     resizes with the panel/window. MinWidth keeps it usable when narrow. -->
+                                <Style TargetType="ctrl:Sparkline">
+                                    <Setter Property="HorizontalAlignment" Value="Stretch"/>
+                                    <Setter Property="MinWidth" Value="80"/>
+                                    <Setter Property="Margin" Value="6,0"/>
+                                </Style>
                             </Grid.Resources>
 
                             <!-- PR (脉率, from PPG 指夹模组) -->
                             <Grid Grid.Row="0">
-                                <Grid.ColumnDefinitions><ColumnDefinition Width="86"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="28"/></Grid.ColumnDefinitions>
+                                <Grid.ColumnDefinitions><ColumnDefinition Width="86"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="28"/></Grid.ColumnDefinitions>
                                 <StackPanel Grid.Column="0" VerticalAlignment="Center"><TextBlock Text="PR" Foreground="{StaticResource AlphaBrush}" FontWeight="Bold"/><TextBlock Text="脉率" Foreground="{StaticResource MutedBrush}" FontSize="10"/></StackPanel>
                                 <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center"><TextBlock Text="{Binding PrText}" Foreground="{StaticResource AlphaBrush}" FontSize="34" FontWeight="Bold"/><TextBlock Text="bpm" Foreground="{StaticResource MutedBrush}" FontSize="11" VerticalAlignment="Bottom" Margin="4,0,0,6"/></StackPanel>
-                                <ctrl:Sparkline Grid.Column="2" Values="{Binding PrSpark}" Stroke="{StaticResource AlphaBrush}"/>
+                                <ctrl:Sparkline Grid.Column="2" Values="{Binding PrSpark}" Stroke="{StaticResource AlphaBrush}" Min="40" Max="160"/>
                                 <StackPanel Grid.Column="3" VerticalAlignment="Center"><TextBlock Text="160" Foreground="{StaticResource MutedBrush}" FontSize="9"/><TextBlock Text="40" Foreground="{StaticResource MutedBrush}" FontSize="9" Margin="0,14,0,0"/></StackPanel>
                             </Grid>
                             <!-- SPO2 -->
                             <Grid Grid.Row="1">
-                                <Grid.ColumnDefinitions><ColumnDefinition Width="86"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="28"/></Grid.ColumnDefinitions>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="86"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="28"/></Grid.ColumnDefinitions>
                                 <StackPanel Grid.Column="0" VerticalAlignment="Center"><TextBlock Text="SPO₂" Foreground="{StaticResource ThetaBrush}" FontWeight="Bold"/><TextBlock Text="血氧饱和度" Foreground="{StaticResource MutedBrush}" FontSize="10"/></StackPanel>
                                 <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center"><TextBlock Text="{Binding Spo2Text}" Foreground="{StaticResource ThetaBrush}" FontSize="34" FontWeight="Bold"/><TextBlock Text="%" Foreground="{StaticResource MutedBrush}" FontSize="11" VerticalAlignment="Bottom" Margin="4,0,0,6"/></StackPanel>
-                                <ctrl:Sparkline Grid.Column="2" Values="{Binding Spo2Spark}" Stroke="{StaticResource ThetaBrush}"/>
+                                <ctrl:Sparkline Grid.Column="2" Values="{Binding Spo2Spark}" Stroke="{StaticResource ThetaBrush}" Min="90" Max="100"/>
                                 <StackPanel Grid.Column="3" VerticalAlignment="Center"><TextBlock Text="100" Foreground="{StaticResource MutedBrush}" FontSize="9"/><TextBlock Text="90" Foreground="{StaticResource MutedBrush}" FontSize="9" Margin="0,14,0,0"/></StackPanel>
                             </Grid>
                             <!-- PRV (脉率变异性, from PPG 指夹模组) -->
                             <Grid Grid.Row="2">
-                                <Grid.ColumnDefinitions><ColumnDefinition Width="86"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="28"/></Grid.ColumnDefinitions>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="86"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="28"/></Grid.ColumnDefinitions>
                                 <StackPanel Grid.Column="0" VerticalAlignment="Center"><TextBlock Text="PRV" Foreground="#FF22D3EE" FontWeight="Bold"/><TextBlock Text="脉率变异性" Foreground="{StaticResource MutedBrush}" FontSize="10"/></StackPanel>
                                 <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center"><TextBlock Text="{Binding PrvText}" Foreground="#FF22D3EE" FontSize="34" FontWeight="Bold"/><TextBlock Text="ms" Foreground="{StaticResource MutedBrush}" FontSize="11" VerticalAlignment="Bottom" Margin="4,0,0,6"/></StackPanel>
-                                <ctrl:Sparkline Grid.Column="2" Values="{Binding PrvSpark}" Stroke="#FF22D3EE"/>
+                                <ctrl:Sparkline Grid.Column="2" Values="{Binding PrvSpark}" Stroke="#FF22D3EE" Min="0" Max="100"/>
                                 <StackPanel Grid.Column="3" VerticalAlignment="Center"><TextBlock Text="100" Foreground="{StaticResource MutedBrush}" FontSize="9"/><TextBlock Text="0" Foreground="{StaticResource MutedBrush}" FontSize="9" Margin="0,14,0,0"/></StackPanel>
                             </Grid>
                             <!-- NIBP -->
@@ -249,19 +263,27 @@
                             </Grid>
                             <!-- RR -->
                             <Grid Grid.Row="4">
-                                <Grid.ColumnDefinitions><ColumnDefinition Width="86"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="28"/></Grid.ColumnDefinitions>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="86"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="28"/></Grid.ColumnDefinitions>
                                 <StackPanel Grid.Column="0" VerticalAlignment="Center"><TextBlock Text="RR" Foreground="{StaticResource DeltaBrush}" FontWeight="Bold"/><TextBlock Text="呼吸频率" Foreground="{StaticResource MutedBrush}" FontSize="10"/></StackPanel>
                                 <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center"><TextBlock Text="{Binding RrText}" Foreground="{StaticResource DeltaBrush}" FontSize="34" FontWeight="Bold"/><TextBlock Text="rpm" Foreground="{StaticResource MutedBrush}" FontSize="11" VerticalAlignment="Bottom" Margin="4,0,0,6"/></StackPanel>
-                                <ctrl:Sparkline Grid.Column="2" Values="{Binding RrSpark}" Stroke="{StaticResource DeltaBrush}"/>
+                                <ctrl:Sparkline Grid.Column="2" Values="{Binding RrSpark}" Stroke="{StaticResource DeltaBrush}" Min="0" Max="30"/>
                                 <StackPanel Grid.Column="3" VerticalAlignment="Center"><TextBlock Text="30" Foreground="{StaticResource MutedBrush}" FontSize="9"/><TextBlock Text="0" Foreground="{StaticResource MutedBrush}" FontSize="9" Margin="0,14,0,0"/></StackPanel>
                             </Grid>
                             <!-- TPI -->
                             <Grid Grid.Row="5">
-                                <Grid.ColumnDefinitions><ColumnDefinition Width="86"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="28"/></Grid.ColumnDefinitions>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="86"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="28"/></Grid.ColumnDefinitions>
                                 <StackPanel Grid.Column="0" VerticalAlignment="Center"><TextBlock Text="TPI" Foreground="#FFA855F7" FontWeight="Bold"/><TextBlock Text="灌注指数" Foreground="{StaticResource MutedBrush}" FontSize="10"/></StackPanel>
-                                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center"><TextBlock Text="{Binding TpiText}" Foreground="#FFA855F7" FontSize="34" FontWeight="Bold"/></StackPanel>
-                                <ctrl:Sparkline Grid.Column="2" Values="{Binding TpiSpark}" Stroke="#FFA855F7"/>
-                                <StackPanel Grid.Column="3" VerticalAlignment="Center"><TextBlock Text="10" Foreground="{StaticResource MutedBrush}" FontSize="9"/><TextBlock Text="0" Foreground="{StaticResource MutedBrush}" FontSize="9" Margin="0,14,0,0"/></StackPanel>
+                                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center"><TextBlock Text="{Binding TpiText}" Foreground="#FFA855F7" FontSize="34" FontWeight="Bold"/><TextBlock Text="%" Foreground="{StaticResource MutedBrush}" FontSize="11" VerticalAlignment="Bottom" Margin="4,0,0,6"/></StackPanel>
+                                <ctrl:Sparkline Grid.Column="2" Values="{Binding TpiSpark}" Stroke="#FFA855F7" Min="0" Max="20"/>
+                                <StackPanel Grid.Column="3" VerticalAlignment="Center"><TextBlock Text="20" Foreground="{StaticResource MutedBrush}" FontSize="9"/><TextBlock Text="0" Foreground="{StaticResource MutedBrush}" FontSize="9" Margin="0,14,0,0"/></StackPanel>
                             </Grid>
                         </Grid>
                     </DockPanel>
@@ -351,11 +373,11 @@
                         <DockPanel DockPanel.Dock="Top" Margin="0,0,0,2">
                             <TextBlock Text="4.  趋势图 (关键参数趋势)" Style="{StaticResource PanelTitle}"/>
                             <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-                                <CheckBox Content="qCON" IsChecked="True" Foreground="#FF3B82F6" Margin="6,0"/>
-                                <CheckBox Content="qNOX" IsChecked="True" Foreground="#FFF59E0B" Margin="6,0"/>
-                                <CheckBox Content="SQI" IsChecked="True" Foreground="#FF22C55E" Margin="6,0"/>
-                                <CheckBox Content="PR" IsChecked="True" Foreground="#FFEF4444" Margin="6,0"/>
-                                <CheckBox Content="SPO₂" Foreground="#FF38BDF8" Margin="6,0"/>
+                                <CheckBox Content="qCON" IsChecked="{Binding ShowQcon}" Foreground="#FF3B82F6" Margin="6,0"/>
+                                <CheckBox Content="qNOX" IsChecked="{Binding ShowQnox}" Foreground="#FFF59E0B" Margin="6,0"/>
+                                <CheckBox Content="SQI" IsChecked="{Binding ShowSqi}" Foreground="#FF22C55E" Margin="6,0"/>
+                                <CheckBox Content="PR" IsChecked="{Binding ShowPr}" Foreground="#FFEF4444" Margin="6,0"/>
+                                <CheckBox Content="SPO₂" IsChecked="{Binding ShowSpo2}" Foreground="#FF38BDF8" Margin="6,0"/>
                             </StackPanel>
                         </DockPanel>
                         <lvc:CartesianChart Series="{Binding TrendSeries}" XAxes="{Binding TrendXAxes}"

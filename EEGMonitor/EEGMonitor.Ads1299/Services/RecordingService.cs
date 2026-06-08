@@ -24,6 +24,7 @@ public sealed class RecordingService : IDisposable
 {
     private const byte TAG_EEG = 1;
     private const byte TAG_VITAL = 2;
+    private const byte TAG_PPG = 3;
 
     private readonly ILogger<RecordingService> _logger;
     private readonly RecordingConfig _cfg;
@@ -78,7 +79,7 @@ public sealed class RecordingService : IDisposable
         File.WriteAllText(Path.Combine(dir, "raw_signal.meta.json"), JsonConvert.SerializeObject(new
         {
             format = "tagged-le-binary",
-            record = "[int64 ticks][byte tag]; tag1 EEG=[float32 uv]; tag2 VITAL=[float32 hr][float32 spo2][float32 pulse]",
+            record = "[int64 ticks][byte tag]; tag1 EEG=[float32 uv]; tag2 VITAL=[float32 pr][float32 spo2][float32 pi]; tag3 PPG=[int32 ir][int32 red]",
             eeg_sample_rate_hz = sampleRate,
             started = DateTime.Now.ToString("o"),
         }, Formatting.Indented));
@@ -125,6 +126,21 @@ public sealed class RecordingService : IDisposable
         }
     }
 
+    /// <summary>Raw PPG sample (IR + RED) at the native acquisition rate, lossless — lets us
+    /// re-derive / diagnose the pulse waveform offline (PR/PRV/PI).</summary>
+    public void RecordRawPpg(DateTime ts, int ir, int red)
+    {
+        var w = _rawWriter;
+        if (!IsRecording || w == null) return;
+        lock (_rawLock)
+        {
+            w.Write(ts.Ticks);
+            w.Write(TAG_PPG);
+            w.Write(ir);
+            w.Write(red);
+        }
+    }
+
     /// <summary>Per-second inference result.</summary>
     public void RecordInference(ProcessedEEGResult result)
     {
@@ -146,6 +162,8 @@ public sealed class RecordingService : IDisposable
             amp_uv = Math.Round(result.EegAmplitudeUv, 1),
             dom_hz = Math.Round(result.EegDominantHz, 1),
             saturated = result.HwIsSaturated,
+            valid = result.SignalValid,                 // 是否接好电极(false=悬空噪声,指标无效)
+            electrode = result.ElectrodeStatus,
         };
         var line = JsonConvert.SerializeObject(compact);
         lock (_infLock) { w.WriteLine(line); }

@@ -71,7 +71,6 @@ public partial class MainViewModel : ObservableObject
     [ObservableProperty] private IReadOnlyList<double>? _rrSpark;
     [ObservableProperty] private IReadOnlyList<double>? _tpiSpark;
     private readonly List<double> _prRoll = new(), _prvRoll = new(), _spo2Roll = new(), _piRoll = new();
-    private double _lastPr, _lastSpo2;     // latest PPG values for trend sampling (aligned to _t)
 
     // ── Indices ──
     [ObservableProperty] private string _qConStatus = "--";
@@ -104,6 +103,21 @@ public partial class MainViewModel : ObservableObject
     public Axis[] TrendYAxes { get; }
     public ObservableCollection<RectangularSection> TrendSections { get; } = new();
 
+    // Trend series refs so the legend checkboxes can show/hide each line.
+    private LineSeries<ObservablePoint> _sQcon = null!, _sQnox = null!, _sSqi = null!, _sSpo2 = null!, _sPr = null!;
+
+    // Bound to the trend-legend checkboxes (defaults match the previous static IsChecked states).
+    [ObservableProperty] private bool _showQcon = true;
+    [ObservableProperty] private bool _showQnox = true;
+    [ObservableProperty] private bool _showSqi = true;
+    [ObservableProperty] private bool _showPr = true;
+    [ObservableProperty] private bool _showSpo2 = true;
+    partial void OnShowQconChanged(bool v) => _sQcon.IsVisible = v;
+    partial void OnShowQnoxChanged(bool v) => _sQnox.IsVisible = v;
+    partial void OnShowSqiChanged(bool v) => _sSqi.IsVisible = v;
+    partial void OnShowPrChanged(bool v) => _sPr.IsVisible = v;
+    partial void OnShowSpo2Changed(bool v) => _sSpo2.IsVisible = v;
+
     public ISeries[] DonutSeries { get; }
     public ISeries[] QConGauge { get; }
     public ISeries[] QNoxGauge { get; }
@@ -116,9 +130,12 @@ public partial class MainViewModel : ObservableObject
     private readonly ObservableCollection<ObservablePoint> _trQcon = new(), _trQnox = new(),
         _trSqi = new(), _trHr = new(), _trSpo2 = new();
 
-    private readonly ObservableValue _dDelta = new(20), _dTheta = new(20), _dAlpha = new(20), _dBeta = new(20), _dGamma = new(20);
+    private readonly ObservableValue _dDelta = new(0), _dTheta = new(0), _dAlpha = new(0), _dBeta = new(0), _dGamma = new(0);
     private readonly ObservableValue _qConVal = new(0), _qNoxVal = new(0);
-    private int _t;
+    // Trend X = elapsed seconds since acquisition start (wall-clock). Keying off this — instead of
+    // an EEG-epoch counter — lets PR/SpO₂ keep trending even when the EEG board sends nothing
+    // (OnResult never fires). TrendTimeLabel maps it back to HH:mm:ss.
+    private double TrendX => _startedAt == default ? 0 : (DateTime.Now - _startedAt).TotalSeconds;
 
     private static SolidColorPaint Paint(string hex) => new(SKColor.Parse(hex));
     private static readonly string[] LaneHex = { "#E2E8F0", "#3B82F6", "#06B6D4", "#22C55E", "#F59E0B", "#A855F7" };
@@ -149,14 +166,13 @@ public partial class MainViewModel : ObservableObject
         EegYAxes = new[] { new Axis { MinLimit = 0, MaxLimit = Lanes, LabelsPaint = null, SeparatorsPaint = null, ShowSeparatorLines = false } };
 
         // Trend
-        TrendSeries = new ISeries[]
-        {
-            TrendLine(_trQcon, "qCON", "#3B82F6", 0),
-            TrendLine(_trQnox, "qNOX", "#F59E0B", 0),
-            TrendLine(_trSqi,  "SQI",  "#22C55E", 0),
-            TrendLine(_trSpo2, "SpO₂", "#38BDF8", 0),
-            TrendLine(_trHr,   "PR",   "#EF4444", 1),
-        };
+        _sQcon = TrendLine(_trQcon, "qCON", "#3B82F6", 0);
+        _sQnox = TrendLine(_trQnox, "qNOX", "#F59E0B", 0);
+        _sSqi  = TrendLine(_trSqi,  "SQI",  "#22C55E", 0);
+        _sSpo2 = TrendLine(_trSpo2, "SpO₂", "#38BDF8", 0);
+        _sPr   = TrendLine(_trHr,   "PR",   "#EF4444", 1);
+        _sSpo2.IsVisible = ShowSpo2;      // SpO₂ off by default (matches the checkbox)
+        TrendSeries = new ISeries[] { _sQcon, _sQnox, _sSqi, _sSpo2, _sPr };
         // Trend X = wall-clock time axis (aligns data + event markers for intuitive review)
         TrendXAxes = new[]
         {
@@ -172,7 +188,7 @@ public partial class MainViewModel : ObservableObject
             new Axis { MinLimit = 0, MaxLimit = 100, LabelsPaint = Paint("#7D8B9A"), TextSize = 11,
                        SeparatorsPaint = new SolidColorPaint(SKColor.Parse("#16202C"), 1) },
             new Axis { MinLimit = 40, MaxLimit = 160, Position = AxisPosition.End,
-                       LabelsPaint = Paint("#22C55E"), TextSize = 11, ShowSeparatorLines = false },
+                       LabelsPaint = Paint("#EF4444"), TextSize = 11, ShowSeparatorLines = false },   // 右轴=PR(红)
         };
 
         // Donut
@@ -190,6 +206,7 @@ public partial class MainViewModel : ObservableObject
         _pipeline.ResultAvailable += r => OnUi(() => OnResult(r));
         _pulse.BpmReceived += OnBpm;
         _ppg.ReadingReceived += OnPpg;
+        _ppg.RawSampleReceived += (ts, ir, red) => _recording.RecordRawPpg(ts, ir, red);   // 无损存原始 PPG 波
 
         _clock = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
         _clock.Tick += (_, _) =>
@@ -286,12 +303,12 @@ public partial class MainViewModel : ObservableObject
     private void CommitEvent(EventItem ev)
     {
         ev.Time = DateTime.Now.ToString("HH:mm:ss");
-        ev.TimeSeconds = _t;
+        ev.TimeSeconds = TrendX;
         Events.Insert(0, ev);
         _recording.RecordEvent(ev);
         TrendSections.Add(new RectangularSection
         {
-            Xi = _t, Xj = _t,
+            Xi = TrendX, Xj = TrendX,
             Stroke = new SolidColorPaint(SKColor.Parse("#94A3B8"), 1) { PathEffect = new LiveChartsCore.SkiaSharpView.Painting.Effects.DashEffect(new float[] { 4, 4 }) },
             Label = ev.Name, LabelSize = 11, LabelPaint = Paint("#94A3B8"),
         });
@@ -325,25 +342,36 @@ public partial class MainViewModel : ObservableObject
             _qConVal.Value = 0; _qNoxVal.Value = 0;
             QConStatus = "信号无效"; QNoxStatus = "信号无效";
         }
-        Sqi = r.SQI;
-        SqiText = valid ? $"{Math.Round(r.SQI)}" : "--";
-        SqiQuality = valid ? QualityStatus(r.SQI) : "无效";
+        // SQI + 频谱占比 are EEG-derived: when the electrode is off they're just floating-input
+        // noise (SQI jitters, donut churns). Gate them on validity — show them only when valid,
+        // otherwise blank/freeze so the UI doesn't imply live data.
+        if (valid)
+        {
+            Sqi = r.SQI;
+            SqiText = $"{Math.Round(r.SQI)}";
+            SqiQuality = QualityStatus(r.SQI);
 
-        // 脉率 PR / SpO₂ / PRV / 灌注指数 now come from the PPG 指夹模组 (see OnPpg); not the EEG result.
+            double tot = r.DeltaPower + r.ThetaPower + r.AlphaPower + r.BetaPower + r.GammaPower; if (tot <= 0) tot = 1;
+            double d = r.DeltaPower / tot, th = r.ThetaPower / tot, al = r.AlphaPower / tot, b = r.BetaPower / tot, g = r.GammaPower / tot;
+            _dDelta.Value = Math.Round(d * 100, 1); _dTheta.Value = Math.Round(th * 100, 1); _dAlpha.Value = Math.Round(al * 100, 1);
+            _dBeta.Value = Math.Round(b * 100, 1); _dGamma.Value = Math.Round(g * 100, 1);
+            DeltaPct = $"{d * 100:0}%"; ThetaPct = $"{th * 100:0}%"; AlphaPct = $"{al * 100:0}%"; BetaPct = $"{b * 100:0}%"; GammaPct = $"{g * 100:0}%";
+        }
+        else
+        {
+            Sqi = 0; SqiText = "--"; SqiQuality = "无效";
+            _dDelta.Value = _dTheta.Value = _dAlpha.Value = _dBeta.Value = _dGamma.Value = 0;
+            DeltaPct = ThetaPct = AlphaPct = BetaPct = GammaPct = "--";
+        }
 
-        double tot = r.DeltaPower + r.ThetaPower + r.AlphaPower + r.BetaPower + r.GammaPower; if (tot <= 0) tot = 1;
-        double d = r.DeltaPower / tot, th = r.ThetaPower / tot, al = r.AlphaPower / tot, b = r.BetaPower / tot, g = r.GammaPower / tot;
-        _dDelta.Value = Math.Round(d * 100, 1); _dTheta.Value = Math.Round(th * 100, 1); _dAlpha.Value = Math.Round(al * 100, 1);
-        _dBeta.Value = Math.Round(b * 100, 1); _dGamma.Value = Math.Round(g * 100, 1);
-        DeltaPct = $"{d * 100:0}%"; ThetaPct = $"{th * 100:0}%"; AlphaPct = $"{al * 100:0}%"; BetaPct = $"{b * 100:0}%"; GammaPct = $"{g * 100:0}%";
+        // 脉率 PR / SpO₂ / PRV / 灌注指数 come from the PPG 指夹模组 (see OnPpg); not the EEG result.
 
-        _t++;
         UpdateEeg(r);
         if (valid && !double.IsNaN(r.BIS)) AddTrend(_trQcon, r.BIS);
         if (valid && r.FNox.HasValue) AddTrend(_trQnox, r.FNox.Value);
-        AddTrend(_trSqi, r.SQI);
-        if (_lastPr > 0) AddTrend(_trHr, _lastPr);           // PR (脉率) from PPG, sampled at the EEG epoch tick
-        if (_lastSpo2 > 0) AddTrend(_trSpo2, _lastSpo2);
+        if (valid) AddTrend(_trSqi, r.SQI);                  // no SQI point while invalid → line holds, doesn't jitter
+        // PR / SpO₂ trends are driven by the PPG module in OnPpg, so they keep updating even when
+        // the EEG board sends nothing (this method wouldn't run at all in that case).
     }
 
     // ── PPG 指夹模组: 脉率 PR + 脉率变异性 PRV + 血氧 SpO₂ + 灌注指数 PI ──
@@ -352,11 +380,11 @@ public partial class MainViewModel : ObservableObject
         double pr = r.Pr > 0 ? r.Pr : r.DeviceHr;            // computed PR; fall back to device reading
         OnUi(() =>
         {
-            if (pr > 0) { PrText = Math.Round(pr).ToString("0"); Push(_prRoll, pr, v => PrSpark = v); }
-            if (r.Spo2 > 0) { Spo2Text = r.Spo2.ToString(); Push(_spo2Roll, r.Spo2, v => Spo2Spark = v); }
+            // Vitals card + trend are BOTH driven here, independent of the EEG pipeline.
+            if (pr > 0) { PrText = Math.Round(pr).ToString("0"); Push(_prRoll, pr, v => PrSpark = v); AddTrend(_trHr, pr); }
+            if (r.Spo2 > 0) { Spo2Text = r.Spo2.ToString(); Push(_spo2Roll, r.Spo2, v => Spo2Spark = v); AddTrend(_trSpo2, r.Spo2); }
             if (r.Prv > 0) { PrvText = $"{r.Prv:0}"; Push(_prvRoll, r.Prv, v => PrvSpark = v); }
             if (r.Pi > 0) { TpiText = $"{r.Pi:0.0}"; Push(_piRoll, r.Pi, v => TpiSpark = v); }
-            _lastPr = pr; _lastSpo2 = r.Spo2;
         });
         if (pr > 0) _pipeline.CurrentHeartRate = (int)Math.Round(pr);
         _recording.RecordRawVital(r.Time, pr, r.Spo2, r.Pi);
@@ -366,7 +394,7 @@ public partial class MainViewModel : ObservableObject
     // module is present, it can still drive the PR display.
     private void OnBpm(int bpm)
     {
-        OnUi(() => { if (bpm > 0) { PrText = bpm.ToString(); _pipeline.CurrentHeartRate = bpm; Push(_prRoll, bpm, v => PrSpark = v); _lastPr = bpm; } });
+        OnUi(() => { if (bpm > 0) { PrText = bpm.ToString(); _pipeline.CurrentHeartRate = bpm; Push(_prRoll, bpm, v => PrSpark = v); AddTrend(_trHr, bpm); } });
         if (bpm > 0) _recording.RecordRawVital(DateTime.Now, bpm, 0, 0);
     }
 
@@ -377,7 +405,7 @@ public partial class MainViewModel : ObservableObject
 
     private void AddTrend(ObservableCollection<ObservablePoint> s, double v)
     {
-        s.Add(new ObservablePoint(_t, v));
+        s.Add(new ObservablePoint(TrendX, v));
         if (s.Count > 7200) s.RemoveAt(0);
     }
 

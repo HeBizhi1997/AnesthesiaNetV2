@@ -218,6 +218,7 @@ public partial class PlaybackViewModel : ObservableObject
                 long t = br.ReadInt64(); byte tag = br.ReadByte();
                 if (tag == 1) { if (br.BaseStream.Position + 4 > len) break; ticks.Add(t); uv.Add(br.ReadSingle()); }
                 else if (tag == 2) { if (br.BaseStream.Position + 12 > len) break; br.ReadSingle(); br.ReadSingle(); br.ReadSingle(); }
+                else if (tag == 3) { if (br.BaseStream.Position + 8 > len) break; br.ReadInt32(); br.ReadInt32(); }   // PPG IR/RED — skip
                 else break;
             }
             _eegTicks = ticks.ToArray(); _eegUv = uv.ToArray();

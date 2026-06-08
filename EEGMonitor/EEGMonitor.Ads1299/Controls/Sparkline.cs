@@ -17,12 +17,24 @@ public sealed class Sparkline : FrameworkElement
         nameof(Stroke), typeof(Brush), typeof(Sparkline),
         new FrameworkPropertyMetadata(Brushes.LimeGreen, FrameworkPropertyMetadataOptions.AffectsRender));
 
+    // Fixed clinical Y-range. When set (not NaN), the trace position reflects the ABSOLUTE value
+    // (e.g. SpO₂ 99 sits near the top of a 90–100 scale) instead of auto-scaling tiny wiggles to
+    // full height — which made the waveform look unrelated to the big number beside it.
+    public static readonly DependencyProperty MinProperty = DependencyProperty.Register(
+        nameof(Min), typeof(double), typeof(Sparkline),
+        new FrameworkPropertyMetadata(double.NaN, FrameworkPropertyMetadataOptions.AffectsRender));
+    public static readonly DependencyProperty MaxProperty = DependencyProperty.Register(
+        nameof(Max), typeof(double), typeof(Sparkline),
+        new FrameworkPropertyMetadata(double.NaN, FrameworkPropertyMetadataOptions.AffectsRender));
+
     public IReadOnlyList<double>? Values
     {
         get => (IReadOnlyList<double>?)GetValue(ValuesProperty);
         set => SetValue(ValuesProperty, value);
     }
     public Brush Stroke { get => (Brush)GetValue(StrokeProperty); set => SetValue(StrokeProperty, value); }
+    public double Min { get => (double)GetValue(MinProperty); set => SetValue(MinProperty, value); }
+    public double Max { get => (double)GetValue(MaxProperty); set => SetValue(MaxProperty, value); }
 
     protected override void OnRender(DrawingContext dc)
     {
@@ -30,8 +42,13 @@ public sealed class Sparkline : FrameworkElement
         double w = ActualWidth, h = ActualHeight;
         if (vals == null || vals.Count < 2 || w < 2 || h < 2) return;
 
-        double min = vals.Min(), max = vals.Max();
-        if (max - min < 1e-9) { min -= 1; max += 1; }
+        // Use the fixed range when supplied; otherwise fall back to auto-scaling.
+        double min = Min, max = Max;
+        if (double.IsNaN(min) || double.IsNaN(max) || max <= min)
+        {
+            min = vals.Min(); max = vals.Max();
+            if (max - min < 1e-9) { min -= 1; max += 1; }
+        }
 
         var pen = new Pen(Stroke, 1.5);
         pen.Freeze();
@@ -41,7 +58,9 @@ public sealed class Sparkline : FrameworkElement
             for (int i = 0; i < vals.Count; i++)
             {
                 double x = w * i / (vals.Count - 1);
-                double y = h - (vals[i] - min) / (max - min) * h * 0.9 - h * 0.05;
+                double norm = (vals[i] - min) / (max - min);
+                if (norm < 0) norm = 0; else if (norm > 1) norm = 1;     // clamp out-of-range to the edge
+                double y = h - norm * h * 0.9 - h * 0.05;
                 if (i == 0) ctx.BeginFigure(new Point(x, y), false, false);
                 else ctx.LineTo(new Point(x, y), true, false);
             }

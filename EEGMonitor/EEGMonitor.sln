@@ -1,13 +1,15 @@
 ﻿
 Microsoft Visual Studio Solution File, Format Version 12.00
-# Visual Studio Version 17
-VisualStudioVersion = 17.8.34316.72
+# Visual Studio Version 18
+VisualStudioVersion = 18.3.11512.155 d18.3
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "EEGMonitor.WPF", "EEGMonitor.WPF\EEGMonitor.WPF.csproj", "{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "EEGMonitor.AnesthesiaSleep", "EEGMonitor.AnesthesiaSleep\EEGMonitor.AnesthesiaSleep.csproj", "{B2C3D4E5-F6A7-8901-BCDE-F12345678901}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "EEGMonitor.Ads1299", "EEGMonitor.Ads1299\EEGMonitor.Ads1299.csproj", "{D5841986-D5C8-4401-AAD4-EB381E2E7F7B}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "EEGRecorder", "EEGRecorder\EEGRecorder.csproj", "{536B6F0F-957F-F571-AE68-78E3FE495B4C}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -55,6 +57,18 @@ Global
 		{D5841986-D5C8-4401-AAD4-EB381E2E7F7B}.Release|x64.Build.0 = Release|x64
 		{D5841986-D5C8-4401-AAD4-EB381E2E7F7B}.Release|x86.ActiveCfg = Release|Any CPU
 		{D5841986-D5C8-4401-AAD4-EB381E2E7F7B}.Release|x86.Build.0 = Release|Any CPU
+		{536B6F0F-957F-F571-AE68-78E3FE495B4C}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{536B6F0F-957F-F571-AE68-78E3FE495B4C}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{536B6F0F-957F-F571-AE68-78E3FE495B4C}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{536B6F0F-957F-F571-AE68-78E3FE495B4C}.Debug|x64.Build.0 = Debug|Any CPU
+		{536B6F0F-957F-F571-AE68-78E3FE495B4C}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{536B6F0F-957F-F571-AE68-78E3FE495B4C}.Debug|x86.Build.0 = Debug|Any CPU
+		{536B6F0F-957F-F571-AE68-78E3FE495B4C}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{536B6F0F-957F-F571-AE68-78E3FE495B4C}.Release|Any CPU.Build.0 = Release|Any CPU
+		{536B6F0F-957F-F571-AE68-78E3FE495B4C}.Release|x64.ActiveCfg = Release|Any CPU
+		{536B6F0F-957F-F571-AE68-78E3FE495B4C}.Release|x64.Build.0 = Release|Any CPU
+		{536B6F0F-957F-F571-AE68-78E3FE495B4C}.Release|x86.ActiveCfg = Release|Any CPU
+		{536B6F0F-957F-F571-AE68-78E3FE495B4C}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

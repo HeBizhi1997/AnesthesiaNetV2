@@ -260,7 +260,10 @@ public sealed class NSMSerialService : ISerialPortService
         if (packet.EEGSamplesUv.Length == 0) return;
 
         var now = DateTime.Now;
-        double periodMs = 1000.0 / _sampleRate;
+        // 用**有效采样率**(实测锁定后的 DetectedSampleRate;未锁定前回退配置值=100)生成逐样本时间戳,
+        // 与分块/Python 端使用的采样率保持一致(避免 100/200 Hz 错配导致时间轴与频谱平移)。
+        int effectiveRate = DetectedSampleRate > 0 ? DetectedSampleRate : _sampleRate;
+        double periodMs = 1000.0 / effectiveRate;
         var baseTime = now.AddMilliseconds(-(EEG_SAMPLES_PER_PACKET - 1) * periodMs);
 
         for (int i = 0; i < EEG_SAMPLES_PER_PACKET; i++)

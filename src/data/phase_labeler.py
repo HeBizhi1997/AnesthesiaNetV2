@@ -142,6 +142,79 @@ def label_phases(bis: np.ndarray) -> np.ndarray:
     return phases
 
 
+# Hypnotic equivalence: MAC → μg/mL (same constant as pk_model.MAC_EQUIV_COEFF).
+_MAC_EQUIV_COEFF = 3.4 / 1.3
+
+
+def label_phases_from_drug(drug_ce: np.ndarray,
+                           mask_drug: np.ndarray,
+                           min_drug_sec: int = 60) -> np.ndarray | None:
+    """
+    Derive surgical phase from the DRUG trajectory instead of the BIS signal.
+
+    Rationale (P0b): the legacy `label_phases(bis)` derives phase by thresholding the
+    very BIS we then regress — a circular target that leaks into the phase-gated head.
+    The hypnotic effect-site trajectory (propofol CE + volatile MAC) is an INDEPENDENT
+    causal driver, so phases keyed to it carry information the EEG model can't already
+    read off its own target.
+
+    Phase rule (hypnotic = CE_prop_raw + MAC_raw·MAC_EQUIV):
+      PRE_OP      : before drug onset
+      INDUCTION   : onset → first time hypnotic reaches the anesthetized plateau (≥50% peak)
+      MAINTENANCE : on the plateau
+      RECOVERY    : after the last plateau window, if hypnotic decays low by the end
+
+    Parameters
+    ----------
+    drug_ce   : (N, 6) window-level PK features (cols: prop_raw, rftn_raw, mac_raw, …)
+    mask_drug : (N,)   drug-data availability
+    min_drug_sec : minimum drug-covered windows required; below this returns None.
+
+    Returns
+    -------
+    phases : (N,) uint8 in {0,1,2,3}, or None when drug data is insufficient
+             (caller should fall back to the BIS-derived labels).
+    """
+    N = len(mask_drug)
+    present = mask_drug > 0.5
+    if present.sum() < min_drug_sec:
+        return None
+
+    prop_raw = drug_ce[:, 0]
+    mac_raw  = drug_ce[:, 2]
+    hyp = np.where(present, prop_raw + mac_raw * _MAC_EQUIV_COEFF, 0.0).astype(np.float64)
+    hyp_s = smooth(hyp, SMOOTH_WIN)
+
+    peak = float(hyp_s.max())
+    if peak < 0.3:          # analgesic-only / negligible hypnotic → unreliable, fall back
+        return None
+
+    phases = np.full(N, MAINTENANCE, dtype=np.uint8)
+
+    onset_thr = max(0.15 * peak, 0.2)
+    above = np.where(hyp_s > onset_thr)[0]
+    if len(above) == 0:
+        return None
+    onset = int(above[0])
+    phases[:onset] = PRE_OP
+
+    hi = hyp_s >= 0.5 * peak          # anesthetized plateau
+    hi_idx = np.where(hi)[0]
+    if len(hi_idx) == 0:
+        phases[onset:] = INDUCTION    # never reached plateau
+        return phases
+
+    first_plateau = int(hi_idx[0])
+    last_plateau  = int(hi_idx[-1])
+    if first_plateau > onset:
+        phases[onset:first_plateau] = INDUCTION
+    # maintenance left as default between plateaus
+    if last_plateau < N - 1 and hyp_s[-1] < 0.5 * peak:
+        phases[last_plateau + 1:] = RECOVERY
+
+    return phases
+
+
 def label_stimulation(bis: np.ndarray,
                        phases: np.ndarray) -> np.ndarray:
     """
@@ -178,6 +251,53 @@ def compute_phase_weights(phases: np.ndarray) -> np.ndarray:
     weights = 1.0 / counts
     weights /= weights.sum()
     return weights[phases.astype(int)]
+
+
+def augment_hdf5_with_drug_phases(h5_path: str, verbose: bool = True) -> None:
+    """
+    Add a 'phases_drug' dataset to every case, derived from the stored `drug_ce`
+    trajectory (P0b). Falls back to the BIS-derived `phases` when drug data is
+    insufficient. Idempotent. Requires the multimodal `drug_ce`/`mask_drug` to
+    already exist (run after augment_hdf5_with_pk).
+    """
+    import h5py
+
+    with h5py.File(h5_path, "a") as f:
+        case_ids = list(f.keys())
+        n_drug = 0
+        n_fallback = 0
+        phase_counts = np.zeros(4, dtype=np.int64)
+
+        for cid in case_ids:
+            grp = f[cid]
+            if "phases_drug" in grp:
+                phase_counts += np.bincount(grp["phases_drug"][:].astype(int), minlength=4)
+                continue
+
+            ph = None
+            if "drug_ce" in grp and "mask_drug" in grp:
+                ph = label_phases_from_drug(grp["drug_ce"][:], grp["mask_drug"][:])
+
+            if ph is None:
+                # fall back to BIS-derived phases (compute if absent)
+                if "phases" in grp:
+                    ph = grp["phases"][:].astype(np.uint8)
+                else:
+                    ph = label_phases(grp["labels"][:].astype(np.float32))
+                n_fallback += 1
+            else:
+                n_drug += 1
+
+            grp.create_dataset("phases_drug", data=ph.astype(np.uint8),
+                               compression="gzip")
+            phase_counts += np.bincount(ph.astype(int), minlength=4)
+
+        if verbose:
+            total = max(int(phase_counts.sum()), 1)
+            print(f"[DrugPhase] drug-derived: {n_drug}  BIS-fallback: {n_fallback}")
+            for i, name in enumerate(PHASE_NAMES):
+                print(f"  {name:12s}: {phase_counts[i]:8,}  "
+                      f"({phase_counts[i]/total*100:.1f}%)")
 
 
 def augment_hdf5_with_labels(h5_path: str, verbose: bool = True) -> None:

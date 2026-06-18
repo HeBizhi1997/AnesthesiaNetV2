@@ -100,6 +100,21 @@ class BISPredictor:
         self._cfg       = {}
         self._feat_ext  = None
         self._sqi_comp  = None
+
+        # ── P3：每病例 awake-anchor 偏置校准 ──────────────────────────────────
+        # 个体 PK/PD 差异(CE50 ±30%)→同等 EEG 形态下 BIS 系统性偏移 15-25 点。
+        # 临床先验：录制通常在诱导前接上电极，患者清醒 → 真值 BIS≈95。
+        # 用开机最初一段（若模型自身也判为清醒）把预测锚定到 target_awake，
+        # 求得一个钳制过的常数偏置加到后续所有预测上（仅平移，不改主干）。
+        self._bias_cal_enabled  = True
+        self._bias_target_awake = 95.0   # 清醒锚点 BIS
+        self._bias_window_n     = 60     # 需累积的有效预测数（≈60s）
+        self._bias_clamp        = 15.0   # 偏置上限（防离谱校准）
+        self._bias_min_awake    = 75.0   # 模型自身需≥此值才认为开机清醒，否则不校准
+        self._bias               = 0.0
+        self._bias_locked        = False
+        self._cal_preds: list[float] = []
+        self.last_bis_uncertainty: float = float("nan")  # P2：最近一次预测的 BIS 不确定度
         # Channel count the model expects — derived from the checkpoint config in
         # _try_load_model (eeg.channels). Single-channel board → 1ch model just works.
         self._n_channels = self._N_CHANNELS
@@ -127,6 +142,9 @@ class BISPredictor:
         import torch
         candidates = [
             model_path,
+            # v17 = shippable model: held-out TEST BIS MAE 5.03, PhAcc 82%, calibrated
+            # uncertainty, drug-derived phases, Phase-3 OFF (see training_history memory).
+            str(_MODEL_ROOT / "outputs" / "checkpoints" / "v17" / "best_model_v3.pt"),
             str(_MODEL_ROOT / "outputs" / "checkpoints" / "v13" / "best_model_v3.pt"),
             str(_MODEL_ROOT / "outputs" / "checkpoints" / "v11" / "best_model_v3.pt"),
             str(_MODEL_ROOT / "outputs" / "checkpoints" / "best_model.pt"),
@@ -137,6 +155,14 @@ class BISPredictor:
             try:
                 ck = torch.load(path, map_location="cpu", weights_only=False)
                 self._cfg = ck.get("cfg") or ck.get("config") or {}
+
+                # P3：从 config 覆盖校准参数（可选）
+                inf = self._cfg.get("inference", {}) or {}
+                self._bias_cal_enabled  = bool(inf.get("calibrate_awake", self._bias_cal_enabled))
+                self._bias_target_awake = float(inf.get("awake_target_bis", self._bias_target_awake))
+                self._bias_window_n     = int(inf.get("calib_window_sec", self._bias_window_n))
+                self._bias_clamp        = float(inf.get("calib_clamp", self._bias_clamp))
+                self._bias_min_awake    = float(inf.get("calib_min_awake_pred", self._bias_min_awake))
 
                 # Channel count from checkpoint (1ch single-electrode board vs 2ch).
                 ch_list = (self._cfg.get("eeg", {}) or {}).get("channels")
@@ -192,7 +218,12 @@ class BISPredictor:
         self._calibrated = False
         self._dead_channel = None
         self._mirror_source = None
-        logger.debug("BISPredictor state + amplitude calibration reset")
+        # P3：重置 awake-anchor 偏置校准
+        self._bias = 0.0
+        self._bias_locked = False
+        self._cal_preds = []
+        self.last_bis_uncertainty = float("nan")
+        logger.debug("BISPredictor state + amplitude + bias calibration reset")
 
     def predict(self, eeg_epoch: np.ndarray, band_powers: dict) -> float:
         """
@@ -403,12 +434,47 @@ class BISPredictor:
 
             self._hx = out["h"]   # carry GRU state to next call
             bis_norm = float(out["pred_bis"].squeeze().cpu().item())   # [0, 1]
-            return float(np.clip(bis_norm * 100.0, 0.0, 100.0))
+            raw_bis  = float(np.clip(bis_norm * 100.0, 0.0, 100.0))
+
+            # P2：异方差不确定度（Laplace 尺度 b → BIS 点数），供 UI 显示可信区间
+            if "pred_logvar" in out:
+                logb = float(out["pred_logvar"].squeeze().cpu().item())
+                self.last_bis_uncertainty = float(np.exp(logb) * 100.0)
+
+            # P3：每病例 awake-anchor 偏置校准
+            return self._apply_bias_calibration(raw_bis)
 
         except Exception as e:
             logger.error(f"Model inference error: {e}")
             self._hx = None   # reset state on error
             return float("nan")
+
+    def _apply_bias_calibration(self, raw_bis: float) -> float:
+        """
+        P3：每病例常数偏置校准（awake-anchor）。
+
+        开机后累积前 _bias_window_n 个有效预测；若其中位数 ≥ _bias_min_awake
+        （模型自身判为清醒 → 录制确在诱导前），则把该中位数锚定到 _bias_target_awake，
+        得到一个钳制在 ±_bias_clamp 内的常数偏置，加到此后所有预测上。
+        若开机即非清醒（接电极时已麻醉），无可靠锚点 → 偏置保持 0。
+        """
+        if not self._bias_cal_enabled:
+            return raw_bis
+        if not self._bias_locked:
+            self._cal_preds.append(raw_bis)
+            if len(self._cal_preds) >= self._bias_window_n:
+                med = float(np.median(self._cal_preds))
+                if med >= self._bias_min_awake:
+                    self._bias = float(np.clip(self._bias_target_awake - med,
+                                               -self._bias_clamp, self._bias_clamp))
+                    logger.info(f"Awake-anchor calibration: median_pred={med:.1f} "
+                                f"→ bias={self._bias:+.1f}")
+                else:
+                    self._bias = 0.0
+                    logger.info(f"Awake-anchor skipped (start not awake: "
+                                f"median_pred={med:.1f} < {self._bias_min_awake:.0f})")
+                self._bias_locked = True
+        return float(np.clip(raw_bis + self._bias, 0.0, 100.0))
 
     # ── Heuristic fallback ────────────────────────────────────────────────────
 

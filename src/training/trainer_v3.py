@@ -94,6 +94,61 @@ def _auroc_numpy(scores: np.ndarray, labels: np.ndarray) -> float:
     return float(np.clip(auc, 0.0, 1.0))
 
 
+def _rankdata(a: np.ndarray) -> np.ndarray:
+    """Average-rank of each element (ties share the mean rank). O(n log n)."""
+    order = np.argsort(a, kind="stable")
+    ranks = np.empty(len(a), dtype=np.float64)
+    ranks[order] = np.arange(1, len(a) + 1, dtype=np.float64)
+    sorted_a = a[order]
+    i = 0
+    while i < len(a):
+        j = i + 1
+        while j < len(a) and sorted_a[j] == sorted_a[i]:
+            j += 1
+        if j > i + 1:
+            ranks[order[i:j]] = ranks[order[i:j]].mean()
+        i = j
+    return ranks
+
+
+def _spearman_corr(pred: np.ndarray, label: np.ndarray) -> float:
+    """Spearman rank correlation between prediction and label (trend fidelity)."""
+    if len(pred) < 3:
+        return float("nan")
+    rp = _rankdata(pred)
+    rl = _rankdata(label)
+    rp -= rp.mean(); rl -= rl.mean()
+    denom = float(np.sqrt((rp ** 2).sum() * (rl ** 2).sum()))
+    if denom < 1e-9:
+        return float("nan")
+    return float((rp * rl).sum() / denom)
+
+
+def _prediction_probability_pk(pred: np.ndarray, label: np.ndarray,
+                               max_n: int = 3000, seed: int = 0) -> float:
+    """
+    Smith's prediction probability Pk (DoA gold-standard trend metric).
+    Pk = P(concordant) + 0.5·P(prediction tie) over label-discordant pairs.
+    1.0 = perfect ordering, 0.5 = chance. Subsampled to max_n for O(m²) tractability.
+    """
+    n = len(pred)
+    if n < 3:
+        return float("nan")
+    if n > max_n:
+        rng = np.random.default_rng(seed)
+        idx = rng.choice(n, max_n, replace=False)
+        pred = pred[idx]; label = label[idx]
+    dy = label[:, None] - label[None, :]
+    dx = pred[:, None] - pred[None, :]
+    valid = dy != 0.0
+    n_valid = float(valid.sum())
+    if n_valid < 1:
+        return float("nan")
+    conc = float((((dx * dy) > 0) & valid).sum())
+    tie  = float(((dx == 0) & valid).sum())
+    return (conc + 0.5 * tie) / n_valid
+
+
 def _causal_rolling_mean(arr: np.ndarray, window: int = 15) -> np.ndarray:
     """15-step causal rolling mean — matches clinical BIS monitor 15 s smoothing delay."""
     cs = np.concatenate([[0.0], np.cumsum(arr)])
@@ -218,6 +273,11 @@ class TrainerV3:
             lambda_vitald=tcfg.get("lambda_vitald", 0.4),
             lambda_distill_pk=tcfg.get("lambda_distill_pk", 0.5),
             lambda_distill_vital=tcfg.get("lambda_distill_vital", 0.3),
+            lambda_resp=tcfg.get("lambda_resp", 0.0),
+            distill_mode=tcfg.get("distill_mode", "byol"),
+            bis_uncertainty=tcfg.get("bis_uncertainty", False),
+            bis_anticipate_steps=tcfg.get("bis_anticipate_steps", 0),
+            logvar_reg=tcfg.get("logvar_reg", 1e-3),
             lambda_trans=tcfg.get("lambda_trans", 0.2),
             transition_boost=tcfg.get("transition_boost", 2.0),
             vel_threshold=tcfg.get("vel_threshold", 0.2),
@@ -225,6 +285,7 @@ class TrainerV3:
             bis_transition_weight=tcfg.get("bis_transition_weight", 1.0),
             bis_transition_dbis=tcfg.get("bis_transition_dbis", 0.02),
             bis_phase_weights=tcfg.get("bis_phase_weights", None),
+            phase_class_weights=tcfg.get("phase_class_weights", None),
             focal_gamma=tcfg.get("focal_gamma", 2.0),
             focal_alpha=tcfg.get("focal_alpha", 0.5),
             stim_pos_weight=tcfg.get("stim_pos_weight", 15.0),
@@ -269,7 +330,7 @@ class TrainerV3:
             "train_reg_pk", "train_reg_vital", "train_trans",
             "val_loss", "val_mae", "val_mae_induction", "val_mae_recovery",
             "val_mae_preop", "val_mae_maint",
-            "val_phase_acc", "val_stim_auroc",
+            "val_phase_acc", "val_stim_auroc", "val_spearman", "val_pk",
             "curriculum_phase", "lr",
         ]}
 
@@ -327,7 +388,7 @@ class TrainerV3:
         accum = {k: 0.0 for k in [
             "loss", "bis_loss", "phase_loss", "stim_loss",
             "pkd_loss", "vitald_loss", "distill_pk", "distill_vital",
-            "reg_pk", "reg_vital", "trans_loss",
+            "resp_loss", "reg_pk", "reg_vital", "trans_loss",
         ]}
         n_batches = 0
         t0 = time.time()
@@ -379,7 +440,8 @@ class TrainerV3:
                     mask_drug=mask_drug, mask_vital=mask_vital,
                     use_vital=(cur_phase >= 3 and (
                         self.criterion.lambda_vitald > 0 or
-                        self.criterion.lambda_distill_vital > 0)),
+                        self.criterion.lambda_distill_vital > 0 or
+                        self.criterion.distill_mode == "response")),
                 )
                 losses = self.criterion(
                     pred_bis     = out["pred_bis"],
@@ -390,6 +452,10 @@ class TrainerV3:
                     stim_labels  = stim_labels,
                     sqi_mean     = sqi_mean,
                     epoch        = epoch,
+                    # v16 不确定性 + 响应蒸馏
+                    pred_logvar         = out.get("pred_logvar"),
+                    bis_teacher         = out.get("bis_teacher"),
+                    mask_resp           = out.get("mask_resp"),
                     # Phase 3 多模态项
                     bis_pkd             = out.get("bis_pkd"),
                     bis_vitald          = out.get("bis_vitald"),
@@ -452,6 +518,7 @@ class TrainerV3:
             "train_vitald":       accum["vitald_loss"]     / n_batches,
             "train_distill_pk":   accum["distill_pk"]      / n_batches,
             "train_distill_vital":accum["distill_vital"]   / n_batches,
+            "train_resp":         accum["resp_loss"]       / n_batches,
             "train_reg_pk":       accum["reg_pk"]          / n_batches,
             "train_reg_vital":    accum["reg_vital"]       / n_batches,
             "train_trans":        accum["trans_loss"]      / n_batches,
@@ -509,6 +576,7 @@ class TrainerV3:
                     stim_labels  = stim_labels,
                     sqi_mean     = sqi_mean,
                     epoch        = epoch,
+                    pred_logvar  = out.get("pred_logvar"),
                 )
 
             bs = wave.shape[0]
@@ -560,6 +628,10 @@ class TrainerV3:
         st_labels  = np.concatenate(all_true_stim)
         stim_auroc = _auroc_numpy(st_scores, st_labels)
 
+        # P0a 趋势保真指标：Spearman ρ（全量）+ Pk（子采样）
+        spearman = _spearman_corr(pred_arr, label_arr)
+        pk       = _prediction_probability_pk(pred_arr, label_arr)
+
         return {
             "val_loss":          total_loss / max(n, 1),
             "val_mae":           mae_overall,
@@ -569,6 +641,8 @@ class TrainerV3:
             "val_mae_maint":     phase_mae(2),
             "val_phase_acc":     phase_acc,
             "val_stim_auroc":    stim_auroc,
+            "val_spearman":      spearman,
+            "val_pk":            pk,
         }
 
     # ── 主训练循环 ────────────────────────────────────────────────────────────
@@ -598,7 +672,7 @@ class TrainerV3:
             f"{'PKD':>7}  {'VitalD':>7}  {'DistPK':>7}  {'DistVit':>7}  "
             f"{'RegPK':>7}  {'RegVit':>7}  {'Trans':>7}  "
             f"{'vMAE':>6}  {'vEMA':>6}  {'vInd':>6}  {'vRec':>6}  "
-            f"{'PhAcc':>6}  {'StAUC':>6}  "
+            f"{'PhAcc':>6}  {'StAUC':>6}  {'Sp':>6}  {'Pk':>6}  "
             f"{'LR':>9}  {'SPS':>6}  {'train_t':>7}  {'val_t':>5}  {'flag'}"
         )
         print(hdr)
@@ -632,6 +706,7 @@ class TrainerV3:
                  f"vd={train_m.get('train_vitald', 0.0):.4f}  "
                  f"dp={train_m['train_distill_pk']:.4f}  "
                  f"dv={train_m['train_distill_vital']:.4f}  "
+                 f"resp={train_m.get('train_resp', 0.0):.4f}  "
                  f"trans={train_m['train_trans']:.4f}  "
                  f"sps={train_m.get('throughput',0):.0f}", "TRAIN")
 
@@ -673,6 +748,8 @@ class TrainerV3:
                 ("val_mae_maint",       val_m["val_mae_maint"]),
                 ("val_phase_acc",       val_m["val_phase_acc"]),
                 ("val_stim_auroc",      val_m["val_stim_auroc"]),
+                ("val_spearman",        val_m["val_spearman"]),
+                ("val_pk",              val_m["val_pk"]),
                 ("curriculum_phase",    cur_phase),
                 ("lr",                  cur_lr),
             ]:
@@ -733,6 +810,8 @@ class TrainerV3:
                 f"{_f(val_m['val_mae_recovery']):>6}  "
                 f"{_f(val_m['val_phase_acc']*100,'.1f')+chr(37):>6}  "
                 f"{_f(val_m['val_stim_auroc'],'.3f'):>6}  "
+                f"{_f(val_m['val_spearman'],'.3f'):>6}  "
+                f"{_f(val_m['val_pk'],'.3f'):>6}  "
                 f"{cur_lr:>9.2e}  "
                 f"{train_m.get('throughput',0):>6.0f}  "
                 f"{train_sec:>6.0f}s  "
@@ -750,6 +829,8 @@ class TrainerV3:
                  f"vRec={_f(val_m['val_mae_recovery'])}  "
                  f"PhAcc={_f(val_m['val_phase_acc']*100,'.1f')}%  "
                  f"StAUC={_f(val_m['val_stim_auroc'],'.3f')}  "
+                 f"Sp={_f(val_m['val_spearman'],'.3f')}  "
+                 f"Pk={_f(val_m['val_pk'],'.3f')}  "
                  f"ni={self.no_improve}/{self.patience}  "
                  f"elapsed={elapsed_total}  eta={_fmt_elapsed(eta_s)}", "VAL")
 

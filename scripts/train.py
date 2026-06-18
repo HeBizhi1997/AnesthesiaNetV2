@@ -205,6 +205,7 @@ def main():
             case_std_pct_high=tcfg.get("case_std_pct_high", 90.0),
             transition_boost=tcfg.get("transition_upsample_factor", 0),
             rebuild_multimodal=getattr(args, "rebuild_mm", False),
+            phase_source=tcfg.get("phase_source", "bis"),
         )
 
         if hasattr(test_ds, "_cache"):

@@ -51,6 +51,24 @@ public record NSMDataPacket
     public int SEF95 { get; init; }    // 1-44 Hz
     public int EOG { get; init; }      // 0-100
 
+    // ── Band powers as relative % (dB → linear → normalised) ──
+    // 协议里 δ/θ/α/β/γ 是 dB(signed byte),既非 0–100 也不能直接互比;厂家界面显示的是
+    // 相对百分比。这里按 10^(dB/10) 线性化后在 5 频段内归一,口径与厂家软件、与
+    // EEGProcessingService 的 _validate_against_device 交叉校验一致,供 UI 显示/对比。
+    public double DeltaPct => BandPct(DeltaPowerDb);
+    public double ThetaPct => BandPct(ThetaPowerDb);
+    public double AlphaPct => BandPct(AlphaPowerDb);
+    public double BetaPct  => BandPct(BetaPowerDb);
+    public double GammaPct => BandPct(GammaPowerDb);
+
+    private double BandPct(int db)
+    {
+        static double Lin(int d) => Math.Pow(10.0, d / 10.0);
+        double total = Lin(DeltaPowerDb) + Lin(ThetaPowerDb) + Lin(AlphaPowerDb)
+                     + Lin(BetaPowerDb) + Lin(GammaPowerDb);
+        return total > 0 ? 100.0 * Lin(db) / total : 0.0;
+    }
+
     // ── Validity ──
     public bool CSIValid => CSI != 0xEE && CSI != 0xFF;
     public bool BSValid => BS != 0xFF;

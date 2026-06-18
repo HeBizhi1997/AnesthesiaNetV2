@@ -1,0 +1,158 @@
+[2026-06-11 21:58:29][START] MERIDIAN (AnesthesiaNetV3) Training Start
+[2026-06-11 21:58:29][CONFIG] device=cuda  AMP=True(torch.bfloat16)
+[2026-06-11 21:58:29][CONFIG] params=565,034  epochs=60  patience=20  lr=1.00e-04  batch=32
+[2026-06-11 21:58:29][CURRICULUM] Phase1: ep1-0  Phase2: ep1-15  Phase3: ep16+
+[2026-06-11 21:58:29][CONFIG] steps/epoch=4,371  train_seqs=139,848  val_seqs=14,311
+[2026-06-11 21:58:29][CURRICULUM] >>> Entering Curriculum Phase 2 at epoch 1 <<<
+[2026-06-11 21:58:29][EPOCH] Epoch 1/60 train start  phase=2  (elapsed=0:00:00)
+[2026-06-11 22:12:57][TRAIN] Epoch 1 train done  868s  loss=-3.6795  bis=-1.8846  phase=0.8966  stim=0.1013  pkd=0.0000  vd=0.0000  dp=0.0000  dv=0.0000  resp=0.0000  trans=0.0000  sps=147295
+[2026-06-11 22:12:57][EPOCH] Epoch 1/60 val start
+[2026-06-11 22:13:17][CKPT] Checkpoint saved  epoch=1  val_MAE=6.22 BIS  path=outputs\checkpoints\v16\best_model_v3.pt
+[2026-06-11 22:13:17][VAL] Epoch 1 val done  20s  vMAE=6.22  EMA=6.22  vInd=10.88  vRec=6.77  PhAcc=43.4%  StAUC=0.673  Sp=0.649  Pk=0.728  ni=0/20  elapsed=0:14:48  eta=14:33:32
+[2026-06-11 22:13:17][EPOCH] Epoch 2/60 train start  phase=2  (elapsed=0:14:48)
+[2026-06-11 22:27:44][TRAIN] Epoch 2 train done  867s  loss=-4.0472  bis=-2.0659  phase=0.8317  stim=0.0484  pkd=0.0000  vd=0.0000  dp=0.0000  dv=0.0000  resp=0.0000  trans=0.0000  sps=146694
+[2026-06-11 22:27:44][EPOCH] Epoch 2/60 val start
+[2026-06-11 22:28:05][CKPT] Checkpoint saved  epoch=2  val_MAE=5.77 BIS  path=outputs\checkpoints\v16\best_model_v3.pt
+[2026-06-11 22:28:05][VAL] Epoch 2 val done  20s  vMAE=5.77  EMA=6.09  vInd=8.23  vRec=6.08  PhAcc=55.5%  StAUC=0.749  Sp=0.690  Pk=0.744  ni=0/20  elapsed=0:29:35  eta=14:18:18
+[2026-06-11 22:28:05][EPOCH] Epoch 3/60 train start  phase=2  (elapsed=0:29:35)
+[2026-06-11 22:42:34][TRAIN] Epoch 3 train done  869s  loss=-4.1929  bis=-2.1382  phase=0.8074  stim=0.0463  pkd=0.0000  vd=0.0000  dp=0.0000  dv=0.0000  resp=0.0000  trans=0.0000  sps=145230
+[2026-06-11 22:42:34][EPOCH] Epoch 3/60 val start
+[2026-06-11 22:42:54][CKPT] Checkpoint saved  epoch=3  val_MAE=5.43 BIS  path=outputs\checkpoints\v16\best_model_v3.pt
+[2026-06-11 22:42:54][VAL] Epoch 3 val done  20s  vMAE=5.43  EMA=5.89  vInd=7.52  vRec=5.67  PhAcc=55.2%  StAUC=0.761  Sp=0.715  Pk=0.759  ni=0/20  elapsed=0:44:25  eta=14:03:56
+[2026-06-11 22:42:54][EPOCH] Epoch 4/60 train start  phase=2  (elapsed=0:44:25)
+[2026-06-11 22:57:23][TRAIN] Epoch 4 train done  869s  loss=-4.2704  bis=-2.1767  phase=0.7898  stim=0.0454  pkd=0.0000  vd=0.0000  dp=0.0000  dv=0.0000  resp=0.0000  trans=0.0000  sps=145232
+[2026-06-11 22:57:23][EPOCH] Epoch 4/60 val start
+[2026-06-11 22:57:43][CKPT] Checkpoint saved  epoch=4  val_MAE=5.37 BIS  path=outputs\checkpoints\v16\best_model_v3.pt
+[2026-06-11 22:57:43][VAL] Epoch 4 val done  21s  vMAE=5.37  EMA=5.73  vInd=7.40  vRec=5.54  PhAcc=55.6%  StAUC=0.771  Sp=0.724  Pk=0.764  ni=0/20  elapsed=0:59:14  eta=13:49:20
+[2026-06-11 22:57:43][EPOCH] Epoch 5/60 train start  phase=2  (elapsed=0:59:14)
+[2026-06-11 23:12:10][TRAIN] Epoch 5 train done  866s  loss=-4.3341  bis=-2.2086  phase=0.7781  stim=0.0448  pkd=0.0000  vd=0.0000  dp=0.0000  dv=0.0000  resp=0.0000  trans=0.0000  sps=146629
+[2026-06-11 23:12:10][EPOCH] Epoch 5/60 val start
+[2026-06-11 23:12:30][CKPT] Checkpoint saved  epoch=5  val_MAE=5.23 BIS  path=outputs\checkpoints\v16\best_model_v3.pt
+[2026-06-11 23:12:30][VAL] Epoch 5 val done  20s  vMAE=5.23  EMA=5.58  vInd=7.05  vRec=5.35  PhAcc=57.6%  StAUC=0.781  Sp=0.728  Pk=0.765  ni=0/20  elapsed=1:14:01  eta=13:34:13
+[2026-06-11 23:12:30][EPOCH] Epoch 6/60 train start  phase=2  (elapsed=1:14:01)
+[2026-06-11 23:26:57][TRAIN] Epoch 6 train done  866s  loss=-4.3861  bis=-2.2347  phase=0.7677  stim=0.0442  pkd=0.0000  vd=0.0000  dp=0.0000  dv=0.0000  resp=0.0000  trans=0.0000  sps=146698
+[2026-06-11 23:26:57][EPOCH] Epoch 6/60 val start
+[2026-06-11 23:27:17][CKPT] Checkpoint saved  epoch=6  val_MAE=5.16 BIS  path=outputs\checkpoints\v16\best_model_v3.pt
+[2026-06-11 23:27:17][VAL] Epoch 6 val done  20s  vMAE=5.16  EMA=5.46  vInd=6.88  vRec=5.29  PhAcc=58.4%  StAUC=0.789  Sp=0.733  Pk=0.767  ni=0/20  elapsed=1:28:48  eta=13:19:12
+[2026-06-11 23:27:17][EPOCH] Epoch 7/60 train start  phase=2  (elapsed=1:28:48)
+[2026-06-11 23:41:43][TRAIN] Epoch 7 train done  866s  loss=-4.4261  bis=-2.2543  phase=0.7596  stim=0.0437  pkd=0.0000  vd=0.0000  dp=0.0000  dv=0.0000  resp=0.0000  trans=0.0000  sps=146694
+[2026-06-11 23:41:43][EPOCH] Epoch 7/60 val start
+[2026-06-11 23:42:04][CKPT] Checkpoint saved  epoch=7  val_MAE=5.10 BIS  path=outputs\checkpoints\v16\best_model_v3.pt
+[2026-06-11 23:42:04][VAL] Epoch 7 val done  20s  vMAE=5.10  EMA=5.35  vInd=6.83  vRec=5.28  PhAcc=59.7%  StAUC=0.793  Sp=0.736  Pk=0.768  ni=0/20  elapsed=1:43:34  eta=13:04:15
+[2026-06-11 23:42:04][EPOCH] Epoch 8/60 train start  phase=2  (elapsed=1:43:34)
+[2026-06-11 23:56:30][TRAIN] Epoch 8 train done  866s  loss=-4.4741  bis=-2.2779  phase=0.7525  stim=0.0435  pkd=0.0000  vd=0.0000  dp=0.0000  dv=0.0000  resp=0.0000  trans=0.0000  sps=146726
+[2026-06-11 23:56:30][EPOCH] Epoch 8/60 val start
+[2026-06-11 23:56:51][CKPT] Checkpoint saved  epoch=8  val_MAE=5.06 BIS  path=outputs\checkpoints\v16\best_model_v3.pt
+[2026-06-11 23:56:51][VAL] Epoch 8 val done  20s  vMAE=5.06  EMA=5.26  vInd=6.59  vRec=5.19  PhAcc=61.3%  StAUC=0.795  Sp=0.735  Pk=0.767  ni=0/20  elapsed=1:58:21  eta=12:49:21
+[2026-06-11 23:56:51][EPOCH] Epoch 9/60 train start  phase=2  (elapsed=1:58:21)
+[2026-06-12 00:11:20][TRAIN] Epoch 9 train done  869s  loss=-4.5091  bis=-2.2952  phase=0.7475  stim=0.0430  pkd=0.0000  vd=0.0000  dp=0.0000  dv=0.0000  resp=0.0000  trans=0.0000  sps=145161
+[2026-06-12 00:11:20][EPOCH] Epoch 9/60 val start
+[2026-06-12 00:11:40][VAL] Epoch 9 val done  21s  vMAE=5.06  EMA=5.20  vInd=6.64  vRec=5.21  PhAcc=63.1%  StAUC=0.796  Sp=0.736  Pk=0.768  ni=0/20  elapsed=2:13:10  eta=12:34:42
+[2026-06-12 00:11:40][EPOCH] Epoch 10/60 train start  phase=2  (elapsed=2:13:10)
+[2026-06-12 00:26:09][TRAIN] Epoch 10 train done  869s  loss=-4.5335  bis=-2.3070  phase=0.7419  stim=0.0428  pkd=0.0000  vd=0.0000  dp=0.0000  dv=0.0000  resp=0.0000  trans=0.0000  sps=145189
+[2026-06-12 00:26:09][EPOCH] Epoch 10/60 val start
+[2026-06-12 00:26:29][CKPT] Checkpoint saved  epoch=10  val_MAE=5.02 BIS  path=outputs\checkpoints\v16\best_model_v3.pt
+[2026-06-12 00:26:29][VAL] Epoch 10 val done  21s  vMAE=5.02  EMA=5.15  vInd=6.65  vRec=5.20  PhAcc=65.1%  StAUC=0.797  Sp=0.737  Pk=0.769  ni=0/20  elapsed=2:28:00  eta=12:20:01
+[2026-06-12 00:26:29][EPOCH] Epoch 11/60 train start  phase=2  (elapsed=2:28:00)
+[2026-06-12 00:40:56][TRAIN] Epoch 11 train done  867s  loss=-4.5675  bis=-2.3236  phase=0.7336  stim=0.0427  pkd=0.0000  vd=0.0000  dp=0.0000  dv=0.0000  resp=0.0000  trans=0.0000  sps=146507
+[2026-06-12 00:40:56][EPOCH] Epoch 11/60 val start
+[2026-06-12 00:41:16][VAL] Epoch 11 val done  20s  vMAE=5.11  EMA=5.14  vInd=6.66  vRec=5.21  PhAcc=64.3%  StAUC=0.795  Sp=0.734  Pk=0.767  ni=0/20  elapsed=2:42:47  eta=12:05:08
+[2026-06-12 00:41:16][EPOCH] Epoch 12/60 train start  phase=2  (elapsed=2:42:47)
+[2026-06-12 00:55:43][TRAIN] Epoch 12 train done  866s  loss=-4.5958  bis=-2.3375  phase=0.7279  stim=0.0425  pkd=0.0000  vd=0.0000  dp=0.0000  dv=0.0000  resp=0.0000  trans=0.0000  sps=146560
+[2026-06-12 00:55:43][EPOCH] Epoch 12/60 val start
+[2026-06-12 00:56:03][VAL] Epoch 12 val done  20s  vMAE=5.06  EMA=5.11  vInd=6.72  vRec=5.19  PhAcc=66.4%  StAUC=0.794  Sp=0.739  Pk=0.769  ni=0/20  elapsed=2:57:34  eta=11:50:16
+[2026-06-12 00:56:03][EPOCH] Epoch 13/60 train start  phase=2  (elapsed=2:57:34)
+[2026-06-12 01:10:29][TRAIN] Epoch 13 train done  866s  loss=-4.6170  bis=-2.3477  phase=0.7208  stim=0.0424  pkd=0.0000  vd=0.0000  dp=0.0000  dv=0.0000  resp=0.0000  trans=0.0000  sps=146535
+[2026-06-12 01:10:29][EPOCH] Epoch 13/60 val start
+[2026-06-12 01:10:50][VAL] Epoch 13 val done  20s  vMAE=5.07  EMA=5.10  vInd=6.67  vRec=5.23  PhAcc=66.7%  StAUC=0.794  Sp=0.737  Pk=0.769  ni=0/20  elapsed=3:12:20  eta=11:35:24
+[2026-06-12 01:10:50][EPOCH] Epoch 14/60 train start  phase=2  (elapsed=3:12:20)
+[2026-06-12 01:25:16][TRAIN] Epoch 14 train done  866s  loss=-4.6458  bis=-2.3617  phase=0.7129  stim=0.0421  pkd=0.0000  vd=0.0000  dp=0.0000  dv=0.0000  resp=0.0000  trans=0.0000  sps=146541
+[2026-06-12 01:25:16][EPOCH] Epoch 14/60 val start
+[2026-06-12 01:25:37][VAL] Epoch 14 val done  21s  vMAE=5.07  EMA=5.09  vInd=6.85  vRec=5.26  PhAcc=65.7%  StAUC=0.794  Sp=0.739  Pk=0.770  ni=0/20  elapsed=3:27:07  eta=11:20:34
+[2026-06-12 01:25:37][EPOCH] Epoch 15/60 train start  phase=2  (elapsed=3:27:07)
+[2026-06-12 01:40:06][TRAIN] Epoch 15 train done  869s  loss=-4.6675  bis=-2.3722  phase=0.7062  stim=0.0420  pkd=0.0000  vd=0.0000  dp=0.0000  dv=0.0000  resp=0.0000  trans=0.0000  sps=145150
+[2026-06-12 01:40:06][EPOCH] Epoch 15/60 val start
+[2026-06-12 01:40:26][VAL] Epoch 15 val done  21s  vMAE=5.06  EMA=5.08  vInd=6.94  vRec=5.29  PhAcc=66.2%  StAUC=0.793  Sp=0.736  Pk=0.770  ni=0/20  elapsed=3:41:57  eta=11:05:51
+[2026-06-12 01:40:26][CURRICULUM] >>> Entering Curriculum Phase 3 at epoch 16 <<<
+[2026-06-12 01:40:26][EPOCH] Epoch 16/60 train start  phase=3  (elapsed=3:41:57)
+[2026-06-12 01:55:19][TRAIN] Epoch 16 train done  892s  loss=-4.6860  bis=-2.3810  phase=0.6982  stim=0.0418  pkd=0.0064  vd=0.0046  dp=0.0000  dv=0.0000  resp=0.0000  trans=0.0016  sps=134232
+[2026-06-12 01:55:19][EPOCH] Epoch 16/60 val start
+[2026-06-12 01:55:39][VAL] Epoch 16 val done  21s  vMAE=5.11  EMA=5.09  vInd=7.27  vRec=5.29  PhAcc=66.2%  StAUC=0.793  Sp=0.735  Pk=0.769  ni=1/20  elapsed=3:57:10  eta=10:52:12
+[2026-06-12 01:55:39][EPOCH] Epoch 17/60 train start  phase=3  (elapsed=3:57:10)
+[2026-06-12 02:10:27][TRAIN] Epoch 17 train done  887s  loss=-4.7080  bis=-2.3919  phase=0.6906  stim=0.0415  pkd=0.0031  vd=0.0029  dp=0.0000  dv=0.0000  resp=0.0000  trans=0.0016  sps=136516
+[2026-06-12 02:10:27][EPOCH] Epoch 17/60 val start
+[2026-06-12 02:10:47][VAL] Epoch 17 val done  21s  vMAE=5.15  EMA=5.11  vInd=6.99  vRec=5.27  PhAcc=66.4%  StAUC=0.793  Sp=0.731  Pk=0.768  ni=2/20  elapsed=4:12:17  eta=10:38:10
+[2026-06-12 02:10:47][EPOCH] Epoch 18/60 train start  phase=3  (elapsed=4:12:17)
+[2026-06-12 02:25:34][TRAIN] Epoch 18 train done  887s  loss=-4.7261  bis=-2.4009  phase=0.6844  stim=0.0415  pkd=0.0029  vd=0.0028  dp=0.0000  dv=0.0000  resp=0.0000  trans=0.0016  sps=136491
+[2026-06-12 02:25:34][EPOCH] Epoch 18/60 val start
+[2026-06-12 02:25:55][VAL] Epoch 18 val done  21s  vMAE=5.18  EMA=5.13  vInd=7.11  vRec=5.28  PhAcc=66.7%  StAUC=0.793  Sp=0.731  Pk=0.768  ni=3/20  elapsed=4:27:25  eta=10:24:00
+[2026-06-12 02:25:55][EPOCH] Epoch 19/60 train start  phase=3  (elapsed=4:27:25)
+[2026-06-12 02:40:42][TRAIN] Epoch 19 train done  887s  loss=-4.7431  bis=-2.4092  phase=0.6756  stim=0.0413  pkd=0.0029  vd=0.0028  dp=0.0000  dv=0.0000  resp=0.0000  trans=0.0016  sps=136473
+[2026-06-12 02:40:42][EPOCH] Epoch 19/60 val start
+[2026-06-12 02:41:03][VAL] Epoch 19 val done  21s  vMAE=5.25  EMA=5.16  vInd=7.11  vRec=5.31  PhAcc=64.7%  StAUC=0.789  Sp=0.721  Pk=0.764  ni=4/20  elapsed=4:42:33  eta=10:09:44
+[2026-06-12 02:41:03][EPOCH] Epoch 20/60 train start  phase=3  (elapsed=4:42:33)
+[2026-06-12 02:55:50][TRAIN] Epoch 20 train done  888s  loss=-4.7591  bis=-2.4172  phase=0.6706  stim=0.0411  pkd=0.0029  vd=0.0028  dp=0.0000  dv=0.0000  resp=0.0000  trans=0.0016  sps=136544
+[2026-06-12 02:55:50][EPOCH] Epoch 20/60 val start
+[2026-06-12 02:56:11][VAL] Epoch 20 val done  21s  vMAE=5.25  EMA=5.19  vInd=7.21  vRec=5.28  PhAcc=67.3%  StAUC=0.790  Sp=0.727  Pk=0.766  ni=5/20  elapsed=4:57:41  eta=9:55:23
+[2026-06-12 02:56:11][EPOCH] Epoch 21/60 train start  phase=3  (elapsed=4:57:41)
+[2026-06-12 03:11:03][TRAIN] Epoch 21 train done  892s  loss=-4.7757  bis=-2.4254  phase=0.6629  stim=0.0409  pkd=0.0029  vd=0.0028  dp=0.0000  dv=0.0000  resp=0.0000  trans=0.0016  sps=134369
+[2026-06-12 03:11:03][EPOCH] Epoch 21/60 val start
+[2026-06-12 03:11:23][VAL] Epoch 21 val done  21s  vMAE=5.25  EMA=5.21  vInd=7.43  vRec=5.34  PhAcc=65.9%  StAUC=0.791  Sp=0.719  Pk=0.763  ni=6/20  elapsed=5:12:54  eta=9:41:06
+[2026-06-12 03:11:23][EPOCH] Epoch 22/60 train start  phase=3  (elapsed=5:12:54)
+[2026-06-12 03:26:16][TRAIN] Epoch 22 train done  893s  loss=-4.7932  bis=-2.4338  phase=0.6586  stim=0.0407  pkd=0.0028  vd=0.0028  dp=0.0000  dv=0.0000  resp=0.0000  trans=0.0016  sps=134183
+[2026-06-12 03:26:16][EPOCH] Epoch 22/60 val start
+[2026-06-12 03:26:37][VAL] Epoch 22 val done  21s  vMAE=5.22  EMA=5.21  vInd=7.73  vRec=5.36  PhAcc=66.7%  StAUC=0.790  Sp=0.723  Pk=0.764  ni=7/20  elapsed=5:28:07  eta=9:26:46
+[2026-06-12 03:26:37][EPOCH] Epoch 23/60 train start  phase=3  (elapsed=5:28:07)
+[2026-06-12 03:41:25][TRAIN] Epoch 23 train done  888s  loss=-4.8057  bis=-2.4397  phase=0.6508  stim=0.0406  pkd=0.0028  vd=0.0028  dp=0.0000  dv=0.0000  resp=0.0000  trans=0.0016  sps=136324
+[2026-06-12 03:41:25][EPOCH] Epoch 23/60 val start
+[2026-06-12 03:41:45][VAL] Epoch 23 val done  21s  vMAE=5.33  EMA=5.25  vInd=7.88  vRec=5.40  PhAcc=65.2%  StAUC=0.791  Sp=0.717  Pk=0.762  ni=8/20  elapsed=5:43:16  eta=9:12:12
+[2026-06-12 03:41:45][EPOCH] Epoch 24/60 train start  phase=3  (elapsed=5:43:16)
+[2026-06-12 03:56:33][TRAIN] Epoch 24 train done  888s  loss=-4.8213  bis=-2.4472  phase=0.6445  stim=0.0404  pkd=0.0028  vd=0.0028  dp=0.0000  dv=0.0000  resp=0.0000  trans=0.0016  sps=136185
+[2026-06-12 03:56:33][EPOCH] Epoch 24/60 val start
+[2026-06-12 03:56:54][VAL] Epoch 24 val done  21s  vMAE=5.30  EMA=5.26  vInd=7.83  vRec=5.35  PhAcc=64.9%  StAUC=0.795  Sp=0.717  Pk=0.761  ni=9/20  elapsed=5:58:24  eta=8:57:37
+[2026-06-12 03:56:54][EPOCH] Epoch 25/60 train start  phase=3  (elapsed=5:58:24)
+[2026-06-12 04:11:42][TRAIN] Epoch 25 train done  888s  loss=-4.8364  bis=-2.4543  phase=0.6364  stim=0.0404  pkd=0.0028  vd=0.0028  dp=0.0000  dv=0.0000  resp=0.0000  trans=0.0016  sps=136337
+[2026-06-12 04:11:42][EPOCH] Epoch 25/60 val start
+[2026-06-12 04:12:02][VAL] Epoch 25 val done  21s  vMAE=5.26  EMA=5.26  vInd=8.21  vRec=5.40  PhAcc=64.8%  StAUC=0.793  Sp=0.715  Pk=0.761  ni=10/20  elapsed=6:13:33  eta=8:42:58
+[2026-06-12 04:12:02][EPOCH] Epoch 26/60 train start  phase=3  (elapsed=6:13:33)
+[2026-06-12 04:26:50][TRAIN] Epoch 26 train done  888s  loss=-4.8518  bis=-2.4617  phase=0.6308  stim=0.0402  pkd=0.0028  vd=0.0028  dp=0.0000  dv=0.0000  resp=0.0000  trans=0.0016  sps=136309
+[2026-06-12 04:26:50][EPOCH] Epoch 26/60 val start
+[2026-06-12 04:27:11][VAL] Epoch 26 val done  21s  vMAE=5.30  EMA=5.27  vInd=8.09  vRec=5.43  PhAcc=65.2%  StAUC=0.792  Sp=0.714  Pk=0.760  ni=11/20  elapsed=6:28:41  eta=8:28:17
+[2026-06-12 04:27:11][EPOCH] Epoch 27/60 train start  phase=3  (elapsed=6:28:41)
+[2026-06-12 04:42:03][TRAIN] Epoch 27 train done  892s  loss=-4.8638  bis=-2.4674  phase=0.6251  stim=0.0400  pkd=0.0028  vd=0.0028  dp=0.0000  dv=0.0000  resp=0.0000  trans=0.0016  sps=134499
+[2026-06-12 04:42:03][EPOCH] Epoch 27/60 val start
+[2026-06-12 04:42:23][VAL] Epoch 27 val done  21s  vMAE=5.30  EMA=5.28  vInd=8.34  vRec=5.44  PhAcc=64.5%  StAUC=0.793  Sp=0.714  Pk=0.761  ni=12/20  elapsed=6:43:54  eta=8:13:39
+[2026-06-12 04:42:23][EPOCH] Epoch 28/60 train start  phase=3  (elapsed=6:43:54)
+[2026-06-12 04:57:15][TRAIN] Epoch 28 train done  892s  loss=-4.8764  bis=-2.4735  phase=0.6210  stim=0.0400  pkd=0.0028  vd=0.0028  dp=0.0000  dv=0.0000  resp=0.0000  trans=0.0016  sps=134376
+[2026-06-12 04:57:15][EPOCH] Epoch 28/60 val start
+[2026-06-12 04:57:35][VAL] Epoch 28 val done  21s  vMAE=5.31  EMA=5.29  vInd=8.02  vRec=5.40  PhAcc=65.5%  StAUC=0.794  Sp=0.712  Pk=0.760  ni=13/20  elapsed=6:59:06  eta=7:58:58
+[2026-06-12 04:57:35][EPOCH] Epoch 29/60 train start  phase=3  (elapsed=6:59:06)
+[2026-06-12 05:12:22][TRAIN] Epoch 29 train done  887s  loss=-4.8896  bis=-2.4799  phase=0.6170  stim=0.0397  pkd=0.0027  vd=0.0028  dp=0.0000  dv=0.0000  resp=0.0000  trans=0.0016  sps=136505
+[2026-06-12 05:12:22][EPOCH] Epoch 29/60 val start
+[2026-06-12 05:12:43][VAL] Epoch 29 val done  21s  vMAE=5.34  EMA=5.31  vInd=7.99  vRec=5.42  PhAcc=64.7%  StAUC=0.793  Sp=0.707  Pk=0.758  ni=14/20  elapsed=7:14:13  eta=7:44:10
+[2026-06-12 05:12:43][EPOCH] Epoch 30/60 train start  phase=3  (elapsed=7:14:13)
+[2026-06-12 05:27:30][TRAIN] Epoch 30 train done  887s  loss=-4.8987  bis=-2.4842  phase=0.6112  stim=0.0397  pkd=0.0027  vd=0.0028  dp=0.0000  dv=0.0000  resp=0.0000  trans=0.0016  sps=136528
+[2026-06-12 05:27:30][EPOCH] Epoch 30/60 val start
+[2026-06-12 05:27:51][VAL] Epoch 30 val done  21s  vMAE=5.36  EMA=5.32  vInd=8.16  vRec=5.44  PhAcc=67.1%  StAUC=0.793  Sp=0.708  Pk=0.758  ni=15/20  elapsed=7:29:21  eta=7:29:21
+[2026-06-12 05:27:51][EPOCH] Epoch 31/60 train start  phase=3  (elapsed=7:29:21)
+[2026-06-12 05:42:38][TRAIN] Epoch 31 train done  887s  loss=-4.9099  bis=-2.4895  phase=0.6064  stim=0.0394  pkd=0.0027  vd=0.0028  dp=0.0000  dv=0.0000  resp=0.0000  trans=0.0016  sps=136516
+[2026-06-12 05:42:38][EPOCH] Epoch 31/60 val start
+[2026-06-12 05:42:59][VAL] Epoch 31 val done  21s  vMAE=5.40  EMA=5.34  vInd=8.19  vRec=5.45  PhAcc=67.5%  StAUC=0.793  Sp=0.705  Pk=0.757  ni=16/20  elapsed=7:44:29  eta=7:14:31
+[2026-06-12 05:42:59][EPOCH] Epoch 32/60 train start  phase=3  (elapsed=7:44:29)
+[2026-06-12 05:57:46][TRAIN] Epoch 32 train done  887s  loss=-4.9216  bis=-2.4953  phase=0.6046  stim=0.0394  pkd=0.0027  vd=0.0028  dp=0.0000  dv=0.0000  resp=0.0000  trans=0.0016  sps=136517
+[2026-06-12 05:57:46][EPOCH] Epoch 32/60 val start
+[2026-06-12 05:58:07][VAL] Epoch 32 val done  21s  vMAE=5.42  EMA=5.37  vInd=8.44  vRec=5.51  PhAcc=65.8%  StAUC=0.793  Sp=0.701  Pk=0.755  ni=17/20  elapsed=7:59:37  eta=6:59:40
+[2026-06-12 05:58:07][EPOCH] Epoch 33/60 train start  phase=3  (elapsed=7:59:37)
+[2026-06-12 06:12:58][TRAIN] Epoch 33 train done  892s  loss=-4.9303  bis=-2.4993  phase=0.5984  stim=0.0393  pkd=0.0027  vd=0.0028  dp=0.0000  dv=0.0000  resp=0.0000  trans=0.0016  sps=134413
+[2026-06-12 06:12:58][EPOCH] Epoch 33/60 val start
+[2026-06-12 06:13:19][VAL] Epoch 33 val done  21s  vMAE=5.42  EMA=5.38  vInd=8.39  vRec=5.46  PhAcc=65.7%  StAUC=0.791  Sp=0.700  Pk=0.754  ni=18/20  elapsed=8:14:49  eta=6:44:51
+[2026-06-12 06:13:19][EPOCH] Epoch 34/60 train start  phase=3  (elapsed=8:14:49)
+[2026-06-12 06:28:10][TRAIN] Epoch 34 train done  891s  loss=-4.9415  bis=-2.5047  phase=0.5944  stim=0.0393  pkd=0.0027  vd=0.0028  dp=0.0000  dv=0.0000  resp=0.0000  trans=0.0016  sps=134556
+[2026-06-12 06:28:10][EPOCH] Epoch 34/60 val start
+[2026-06-12 06:28:31][VAL] Epoch 34 val done  21s  vMAE=5.39  EMA=5.38  vInd=8.22  vRec=5.44  PhAcc=65.5%  StAUC=0.791  Sp=0.700  Pk=0.753  ni=19/20  elapsed=8:30:01  eta=6:30:01
+[2026-06-12 06:28:31][EPOCH] Epoch 35/60 train start  phase=3  (elapsed=8:30:01)
+[2026-06-12 06:43:18][TRAIN] Epoch 35 train done  887s  loss=-4.9515  bis=-2.5096  phase=0.5918  stim=0.0391  pkd=0.0027  vd=0.0028  dp=0.0000  dv=0.0000  resp=0.0000  trans=0.0016  sps=136356
+[2026-06-12 06:43:18][EPOCH] Epoch 35/60 val start
+[2026-06-12 06:43:39][VAL] Epoch 35 val done  21s  vMAE=5.41  EMA=5.39  vInd=8.30  vRec=5.44  PhAcc=66.9%  StAUC=0.789  Sp=0.703  Pk=0.755  ni=20/20  elapsed=8:45:09  eta=6:15:07
+[2026-06-12 06:43:39][STOP] Early stopping at epoch 35 (patience=20  no_improve=20  EMA=5.39)
+[2026-06-12 06:43:39][DONE] Training complete.  Best val_MAE=5.02 BIS

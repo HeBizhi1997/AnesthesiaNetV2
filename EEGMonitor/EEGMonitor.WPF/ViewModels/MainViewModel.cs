@@ -61,8 +61,10 @@ public partial class MainViewModel : BaseViewModel
         OnPropertyChanged(nameof(NsmSampleRateVisible));
     }
     public DeviceType[] DeviceTypes { get; } = { DeviceType.ADS1299, DeviceType.NSM };
+    // NSM(NSA-2000)固定 ~100 Hz(100 样本/包、约 1 包/s)。只保留 100:错误地选 200/250/500
+    // 会把频段整体平移 2× 等(历史 bug 根因);连接后仍以 NSMSerialService 的实测包率自动锁定/纠偏。
     [ObservableProperty] private int _nsmSampleRate = 100;
-    public List<int> NsmSampleRates { get; } = new() { 100, 200, 250, 500 };
+    public List<int> NsmSampleRates { get; } = new() { 100 };
     public Visibility NsmSampleRateVisible => SelectedDeviceType == DeviceType.NSM ? Visibility.Visible : Visibility.Collapsed;
 
     // ── Pulse sensor connection ──────────────────────────────────────────────
@@ -712,14 +714,16 @@ public partial class MainViewModel : BaseViewModel
                 NsmNoxZone = "";
             }
 
-            // ── NSM band powers (dB raw) ───────────────────────────────────
-            NsmDeltaPower = pkt.DeltaPowerDb;
-            NsmThetaPower = pkt.ThetaPowerDb;
-            NsmAlphaPower = pkt.AlphaPowerDb;
-            NsmBetaPower  = pkt.BetaPowerDb;
-            NsmGammaPower = pkt.GammaPowerDb;
+            // ── NSM band powers ────────────────────────────────────────────
+            // 显示用「相对%」(dB→线性→归一,口径同厂家界面);0–100 进度条/文本因此可比。
+            // 原始 dB 仍单独传给 Python 做交叉校验(那里按 dB 处理)。
+            NsmDeltaPower = pkt.DeltaPct;
+            NsmThetaPower = pkt.ThetaPct;
+            NsmAlphaPower = pkt.AlphaPct;
+            NsmBetaPower  = pkt.BetaPct;
+            NsmGammaPower = pkt.GammaPct;
 
-            // Feed device band powers to the pipeline for cross-validation
+            // Feed RAW device band powers (dB) to the pipeline for cross-validation
             if (IsRecording || IsConnected)
             {
                 _pipeline.SetDeviceBandPowers(new Dictionary<string, int>

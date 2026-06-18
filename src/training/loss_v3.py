@@ -160,6 +160,11 @@ class MultiTaskLossV3(nn.Module):
         lambda_vitald:        float = 0.4,   # VitalDHead BIS 预测（修复 v9 VitalEncoder 无梯度缺陷）
         lambda_distill_pk:    float = 0.2,   # 理论 §4.2：蒸馏是正则化，须 < λ_bis
         lambda_distill_vital: float = 0.2,   # 理论 §4.2：同上
+        lambda_resp:          float = 0.0,   # v16：响应蒸馏权重（学生←教师 BIS 软预测）
+        distill_mode:         str   = "byol",  # v16："byol" | "response"
+        bis_uncertainty:      bool  = False,   # v16：Laplace NLL 异方差损失
+        bis_anticipate_steps: int   = 0,       # v16：让 pred(t) 对齐 label(t+k)，补偿 BIS 滞后
+        logvar_reg:           float = 1e-3,    # v16：log b 的 L2 正则（防尺度坍塌/爆炸）
         lambda_trans:         float = 0.3,   # 理论 §4.2：CE 方向约束
         transition_boost:     float = 2.0,   # 高 velocity 时步放大
         vel_threshold:        float = 0.2,   # ce_velocity 过渡期阈值
@@ -168,6 +173,10 @@ class MultiTaskLossV3(nn.Module):
         bis_transition_dbis:   float = 0.02, # v14: |Δlabel/步| 阈值（0.02≈2 BIS/s），超过即过渡区
         bis_phase_weights: Optional[list] = None,  # v15: 相位平衡 L_bis 权重 [pre_op,ind,maint,rec]
                                                    #      None→[1,1,1,1] 无操作；maintenance 基准 1.0
+        phase_class_weights: Optional[list] = None,  # v16c: 覆盖相位 CE 类别权重（4 值）。
+                                                     #      None→沿用 BIS 分布的 _PHASE_WEIGHTS（旧默认）。
+                                                     #      phase_source="drug" 时分布变化(rec 1.5%→15.9%)，
+                                                     #      须传入按药物分布算的权重，否则相位头过度预测 recovery。
         focal_gamma:          float = 2.0,
         focal_alpha:          float = 0.5,    # v8 validated; 0.99→9801:1 gradient ratio (broken)
         stim_pos_weight:      float = 15.0,   # v8 validated; 99→9801:1 gradient ratio (broken)
@@ -188,6 +197,11 @@ class MultiTaskLossV3(nn.Module):
         self.lambda_vitald        = lambda_vitald
         self.lambda_distill_pk    = lambda_distill_pk
         self.lambda_distill_vital = lambda_distill_vital
+        self.lambda_resp          = lambda_resp
+        self.distill_mode         = distill_mode
+        self.bis_uncertainty      = bis_uncertainty
+        self.bis_anticipate_steps = bis_anticipate_steps
+        self.logvar_reg           = logvar_reg
         self.lambda_trans         = lambda_trans
         self.transition_boost     = transition_boost
         self.vel_threshold        = vel_threshold
@@ -202,7 +216,12 @@ class MultiTaskLossV3(nn.Module):
         self.use_auto_weight      = use_auto_weight
         self.auto_weight_temp     = auto_weight_temp
 
-        self.register_buffer("phase_weights", _PHASE_WEIGHTS)
+        # v16c：相位 CE 类别权重——phase_source="drug" 须用药物分布权重（见上）
+        if phase_class_weights is not None:
+            _pw = torch.tensor(phase_class_weights, dtype=torch.float32)
+        else:
+            _pw = _PHASE_WEIGHTS.clone()
+        self.register_buffer("phase_weights", _pw)
 
         # v15: 相位平衡 L_bis 权重 —— 针对 maintenance(97%) 主导导致的输出区间坍缩
         # （诊断 diag_preop：pre_op/induction/recovery 系统性欠预测，预测 p99 仅 81）。
@@ -233,6 +252,10 @@ class MultiTaskLossV3(nn.Module):
         sqi_mean:     torch.Tensor,            # (B, T) SQI 掩码
         # 课程阶段控制
         epoch:        int = 1,
+        # v16 新增
+        pred_logvar:  Optional[torch.Tensor] = None,  # (B,T,1) Laplace log b（异方差）
+        bis_teacher:  Optional[torch.Tensor] = None,  # (B,T,1) 融合教师 BIS 预测（响应蒸馏）
+        mask_resp:    Optional[torch.Tensor] = None,  # (B,T)   教师可用性掩码
         # Phase 3 附加项（均为可选，仅 Phase 3 提供）
         bis_pkd:      Optional[torch.Tensor] = None,  # (B,T,1) PK 辅助 BIS
         bis_vitald:   Optional[torch.Tensor] = None,  # (B,T,1) Vital 辅助 BIS（v3 fix）
@@ -253,31 +276,55 @@ class MultiTaskLossV3(nn.Module):
         B, T = label_bis.shape
         cur_phase = self.get_curriculum_phase(epoch)
 
-        # ── 1. L_bis：SQI 遮掩 + 相位平衡 + 过渡区加权 Huber ─────────────────────
-        # 逐元素 Huber，权重 = SQI掩码 × max(相位平衡, 过渡区放大)。
+        # ── 1. L_bis：SQI 遮掩 + 相位平衡 + 过渡区加权 + （可选）异方差 NLL ────────
+        # 逐元素误差，权重 = SQI掩码 × max(相位平衡, 过渡区放大)。
         #   · 过渡区(velocity)：|Δlabel| 斜率，针对诱导/复苏陡变段（v14）。
         #   · 相位平衡(v15)：按相位上采样 pre_op/诱导/复苏，修复 maintenance(97%)
         #     主导造成的输出区间坍缩（diag_preop：这些相位系统性欠预测 14/4/9 BIS）。
         #   两者取 max 而非相乘，避免诱导陡变段权重爆炸（6×3=18）。
-        sqi_ok  = (sqi_mean > 0.5).float()
-        pred_sq = pred_bis.squeeze(-1)
-        huber_el = F.huber_loss(
-            pred_sq, label_bis, delta=self.huber_delta, reduction="none")  # (B, T)
+        # v16 前瞻滞后：bis_anticipate_steps=k 时让 pred(t) 对齐 label(t+k)，
+        #   令显示值领先商用 BIS k 秒（补偿 ke0+监护仪平滑造成的总滞后），尾部 k 步丢弃。
+        # v16 异方差：bis_uncertainty=True 时用 Laplace NLL（|e|·exp(-s)+s），
+        #   s=log b 由 logvar_head 预测；过渡区自动获得高 b → 既给可信区间又重加权高误差段。
+        lag = self.bis_anticipate_steps
+        if lag > 0 and T > lag:
+            pred_sq   = pred_bis[:, :T - lag, 0]            # (B, T-lag)
+            label_use = label_bis[:, lag:]                  # (B, T-lag)
+            sqi_use   = sqi_mean[:, :T - lag]
+            phase_use = phase_labels[:, :T - lag]
+            logvar_use = pred_logvar[:, :T - lag, 0] if pred_logvar is not None else None
+        else:
+            pred_sq   = pred_bis.squeeze(-1)
+            label_use = label_bis
+            sqi_use   = sqi_mean
+            phase_use = phase_labels
+            logvar_use = pred_logvar.squeeze(-1) if pred_logvar is not None else None
 
-        # 速度型过渡权重
-        if self.bis_transition_weight > 1.0 and T > 1:
-            dlabel = torch.zeros_like(label_bis)
-            dlabel[:, 1:] = (label_bis[:, 1:] - label_bis[:, :-1]).abs()
+        Tb = label_use.shape[1]
+        sqi_ok = (sqi_use > 0.5).float()
+
+        if self.bis_uncertainty and logvar_use is not None:
+            abs_err = (pred_sq - label_use).abs()
+            s = logvar_use.clamp(-6.0, 2.0)
+            err_el = abs_err * torch.exp(-s) + s + self.logvar_reg * s.pow(2)
+        else:
+            err_el = F.huber_loss(
+                pred_sq, label_use, delta=self.huber_delta, reduction="none")  # (B, Tb)
+
+        # 速度型过渡权重（基于对齐后的目标 label_use）
+        if self.bis_transition_weight > 1.0 and Tb > 1:
+            dlabel = torch.zeros_like(label_use)
+            dlabel[:, 1:] = (label_use[:, 1:] - label_use[:, :-1]).abs()
             is_trans = (dlabel > self.bis_transition_dbis).float()
             w_trans = 1.0 + (self.bis_transition_weight - 1.0) * is_trans
         else:
-            w_trans = torch.ones_like(label_bis)
+            w_trans = torch.ones_like(label_use)
 
-        # 相位平衡权重（phase_labels:(B,T) int{0..3}）
-        w_phase = self.bis_phase_weights.to(label_bis.device)[phase_labels.clamp(0, 3)]
+        # 相位平衡权重（phase_use:(B,Tb) int{0..3}）
+        w_phase = self.bis_phase_weights.to(label_use.device)[phase_use.clamp(0, 3)]
 
         w_bis = sqi_ok * torch.maximum(w_phase, w_trans)
-        bis_err = (huber_el * w_bis).sum() / (w_bis.sum() + 1e-6)
+        bis_err = (err_el * w_bis).sum() / (w_bis.sum() + 1e-6)
 
         # ── 2. L_phase：加权交叉熵 ───────────────────────────────────────────
         ph_logits_flat = phase_logits.view(B * T, -1)
@@ -327,6 +374,7 @@ class MultiTaskLossV3(nn.Module):
                 "pkd_loss":      pred_bis.new_zeros(1).squeeze().detach(),
                 "distill_pk":    pred_bis.new_zeros(1).squeeze().detach(),
                 "distill_vital": pred_bis.new_zeros(1).squeeze().detach(),
+                "resp_loss":     pred_bis.new_zeros(1).squeeze().detach(),
                 "reg_pk":        pred_bis.new_zeros(1).squeeze().detach(),
                 "reg_vital":     pred_bis.new_zeros(1).squeeze().detach(),
                 "trans_loss":    pred_bis.new_zeros(1).squeeze().detach(),
@@ -369,6 +417,16 @@ class MultiTaskLossV3(nn.Module):
         reg_vital_err = reg_distill_vital if reg_distill_vital is not None \
                         else pred_bis.new_zeros(1).squeeze()
 
+        # 5c. L_resp：响应蒸馏（学生 pred_bis ← 教师融合 BIS 软预测，v16）
+        #     教师(bis_teacher)已 detach，梯度只回流 EEG 学生；只在教师可用时步计算。
+        #     作用：在 EEG→BIS 多对一/带噪映射上提供药物/生理知情的平滑监督目标，
+        #     突破单模态 EEG 的信息上限（理论 §2.1），替代失效的 BYOL 特征对齐。
+        resp_err = pred_bis.new_zeros(1).squeeze()
+        if (self.distill_mode == "response" and bis_teacher is not None
+                and mask_resp is not None):
+            resp_err = masked_huber_loss(
+                pred_bis, bis_teacher.detach().squeeze(-1), mask_resp, self.huber_delta)
+
         # 6. L_trans：CE 方向约束
         trans_err = pred_bis.new_zeros(1).squeeze()
         if drug_ce is not None and mask_drug is not None:
@@ -401,6 +459,7 @@ class MultiTaskLossV3(nn.Module):
             self.lambda_vitald        * vitald_err        +
             self.lambda_distill_pk    * distill_pk_err   +
             self.lambda_distill_vital * distill_vital_err +
+            self.lambda_resp          * resp_err          +   # v16 响应蒸馏
             self.lambda_trans         * trans_err         +
             0.01                      * reg_pk_err        +   # small fixed weight
             0.01                      * reg_vital_err         # small fixed weight
@@ -416,6 +475,7 @@ class MultiTaskLossV3(nn.Module):
             "vitald_loss":   vitald_err.detach(),
             "distill_pk":    distill_pk_err.detach(),
             "distill_vital": distill_vital_err.detach(),
+            "resp_loss":     resp_err.detach(),
             "reg_pk":        reg_pk_err.detach(),
             "reg_vital":     reg_vital_err.detach(),
             "trans_loss":    trans_err.detach(),

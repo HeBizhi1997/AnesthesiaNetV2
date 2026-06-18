@@ -1,0 +1,220 @@
+# EEG Pipeline Configuration v16 — MERIDIAN v16
+#
+# v16 = "不换大方向" 的 P0–P3 落地（骨干仍 CNN+GRU，推理仍 EEG-only）：
+#
+#   P0a 评估诚实化：trainer_v3 新增趋势保真指标
+#         - Spearman ρ（pred vs BIS 全量秩相关）
+#         - Pk（Smith 预测概率，DoA 金标准趋势指标）
+#       仍用权重 EMA 选点/上报；逐相位 MAE 已有。临床看趋势，不只看逐点 MAE。
+#
+#   P0b 去循环标签：phase_source="drug"
+#       相位改由药物效应室轨迹（propofol CE + 挥发性 MAC）派生（phases_drug），
+#       脱离 "从 BIS 阈值推相位再去 gate BIS" 的循环；药物不足的病例自动回退 BIS 相位。
+#       旧的 BIS 派生 stim_events 不再用于训练（v3 路径只用心血管 stim_cv）。
+#
+#   P1 响应蒸馏：distill_mode="response"（替代已验证无效的 BYOL 特征对齐）
+#       教师头 pkd/vitald 用真实 BIS 直接监督（强教师）→ 融合成 bis_teacher；
+#       学生 pred_bis 被 L_resp 拉向 bis_teacher.detach()（梯度只入 EEG 学生）。
+#       这是 Lopez-Paz 2016 generalized distillation 的正确用法，用药物/生理
+#       知情的平滑目标突破单模态 EEG 信息上限（理论 §2.1）。
+#
+#   P2 不确定性 + 滞后：
+#       - bis_uncertainty=true：异方差 Laplace NLL 头，输出每时步可信度 b；
+#         过渡区自动高 b → 既给临床可信区间，又重加权高误差诱导/复苏段。
+#       - bis_anticipate_steps：前瞻滞后机制（pred(t)←label(t+k)）已实现并暴露，
+#         默认 0。启用会让显示值领先商用 BIS k 秒，但也会抬高与未滞后标签比较的
+#         vMAE（指标口径变化）；需配套调整 eval 口径后再开，留作可调实验项。
+#         当前 BIS 滞后主要由响应蒸馏教师（drug_ce 含 90s 滞后 CE_lagged 特征）补偿。
+#
+#   P3 个体校准：推理端 awake-anchor 偏置校准（见 inference 段），仅平移输出、不改主干。
+#
+#   训练命令（复用 v13 预处理 HDF5；首次会自动补 phases_drug，无需重 preprocess）：
+#     python scripts/train.py --config configs/pipeline_v16.yaml \
+#         --data outputs/preprocessed/dataset_v3_v13.h5
+
+eeg:
+  channels: ["BIS/EEG1_WAV", "BIS/EEG2_WAV"]
+  srate: 128
+
+labels:
+  tracks: ["BIS/BIS", "BIS/SQI", "BIS/SR"]
+  target: "BIS/BIS"
+  sqi_track: "BIS/SQI"
+  sr_track: "BIS/SR"
+
+windowing:
+  window_sec: 4
+  stride_sec: 1
+  label_lag_sec: 15
+  min_valid_label: 10
+  max_valid_label: 100
+  baseline_sec: 60
+
+normalization:
+  use_band_ratio: true
+  delta_dominance_thresh: 0.90
+  alpha_beta_band_hz: [8.0, 30.0]
+
+sqi:
+  min_score: 0.5
+  kurtosis_thresh: 5.0
+  high_freq_ratio_thresh: 0.4
+
+filters:
+  median_kernel_ms: 20
+  highpass_hz: 0.1
+  lowpass_hz: 47.0
+  notch_hz: [60.0]
+  notch_q: 30.0
+
+wavelet:
+  wavelet: "db4"
+  level: 5
+  esu_energy_thresh: 3.0
+
+features:
+  bands:
+    delta: [0.5, 4.0]
+    theta: [4.0, 8.0]
+    alpha: [8.0, 13.0]
+    beta:  [13.0, 30.0]
+    gamma: [30.0, 47.0]
+  permutation_entropy:
+    order: 6
+    delay: 1
+  sef95: true
+  lzc: true
+  bsr: true
+  bsr_thresholds_uv: [2.0, 5.0, 10.0]
+  spectral_slope: true
+  gamma_emg_ratio: true
+  sigma_power: true
+  slow_oscillation: true
+  dfa_alpha: false
+  zero_crossing_rate: true
+  hjorth_mobility: true
+  hjorth_complexity: false
+  pac: true
+
+model:
+  cnn_channels: [32, 64, 128]
+  cnn_kernel: 7
+  feature_dim: 38           # 与 v13 一致（复用同一 HDF5）
+  d_model: 128
+  gru_layers: 2
+  gru_dropout: 0.15
+  lnn_backend: "gru"
+  sqi_inertia_threshold: 0.5
+  bsr_layer: true
+  grad_checkpoint: true
+
+  bis_head: "shared"        # 单一共享头 + 软相位条件（v14）
+  norm_type: "batch"        # BatchNorm（GroupNorm 在 eval 慢 8-10x，见 v14 记录）
+
+  # v16：重新启用多模态（响应蒸馏教师需要 PK/Vital 编码器与教师头）
+  enable_multimodal: true
+  distill_mode:    "response"   # P1：响应蒸馏（非 BYOL）
+  bis_uncertainty: true         # P2：异方差 Laplace NLL 头
+
+  pk_hidden: 64
+  vital_hidden: 64
+  d_proj: 64
+
+training:
+  model_version: "v3"
+
+  seq_len: 300
+  seq_stride: 150
+
+  case_std_pct_low: 10
+  case_std_pct_high: 90
+  min_seq_std: 0.0
+  balance_bis: false
+
+  # P0b：药物轨迹派生相位（破除循环标签）
+  phase_source: "drug"
+
+  # 课程：Phase1 ep1-15 建 BIS 骨干；Phase2 ep1+ 起 stim；Phase3 永不触发（v16c）
+  # 三次实测（v13 BYOL / v16 resp@0.3 / v16b resp@0.05）一致证明 Phase3 多模态对
+  # BIS MAE 净劣化（EEG 骨干 ep10-15 已达最优，任何 Phase3 辅助损失只会把它拉偏）。
+  # enable_multimodal 仍 true 以匹配 ep10 检查点结构（教师模块休眠、无梯度）。
+  phase2_start_epoch: 1
+  phase3_start_epoch: 9999
+
+  # Loss weights
+  lambda_bis:   2.0
+  lambda_phase: 0.10        # 相位现在是独立信号（药物派生），适度回升（v15=0.03）
+
+  lambda_stim:  0.15
+
+  # v16c：相位类别权重按药物派生分布重算（实测 [pre 2.3% / ind 0.7% / maint 81.2% /
+  # rec 15.9%]，scripts/analyze_drug_phases.py）。旧默认 [0.78,2.15,0.12,0.96] 假设
+  # recovery 仅 1.5%，会让相位头过度预测 recovery（PhAcc 卡 66%）。
+  phase_class_weights: [1.19, 2.16, 0.20, 0.45]
+
+  # P2：过渡区 L_bis 加权（按标签斜率）。与 Laplace NLL 协同打击诱导/复苏高误差
+  bis_transition_weight: 3.0
+  bis_transition_dbis:   0.02
+  bis_uncertainty:       true   # 损失侧开关（与 model.bis_uncertainty 对应）
+  bis_anticipate_steps:  0      # P2 滞后机制（默认关，见顶部说明）
+  logvar_reg:            1.0e-3
+
+  # P1：响应蒸馏 —— 教师头用真实 BIS 训练，学生蒸馏教师软预测
+  lambda_pkd:           0.4     # 教师 PK 头（真实 BIS 监督）
+  lambda_vitald:        0.4     # 教师 Vital 头（真实 BIS 监督）
+  lambda_resp:          0.05    # 学生 ← 教师 BIS 软预测（v16b：0.3→0.05，λ_resp=0.3
+                                #   实测 Phase3 单调劣化 EMA 5.08→5.39；给响应蒸馏更温和一档）
+  lambda_distill_pk:    0.0     # BYOL 关闭
+  lambda_distill_vital: 0.0     # BYOL 关闭
+  lambda_trans:         0.2     # CE 方向约束（保留）
+
+  transition_boost: 2.0
+  vel_threshold:    0.2
+
+  # Stim detection
+  focal_alpha:     0.5
+  stim_pos_weight: 15.0
+  focal_gamma:     2.0
+
+  use_auto_weight:  false
+  auto_weight_temp: 0.5
+
+  transition_upsample_factor: 2
+
+  # Optimizer
+  batch_size: 32
+  lr: 1.0e-4
+  epochs: 60
+  patience: 20
+
+  lr_schedule: "cosine"
+  lr_eta_min: 1.0e-6
+
+  use_weight_ema:  true
+  weight_ema_decay: 0.999
+
+  stim_warmup_epochs:   5
+  phase3_warmup_epochs: 5    # 响应蒸馏在 ep16→ep21 线性热身
+
+  noise_std: 0.05
+  val_split: 0.15
+  test_split: 0.1
+  seed: 42
+  steps_per_epoch: null
+  n_prefetch: 4
+  huber_delta: 0.05
+
+# P3：推理端每病例 awake-anchor 偏置校准（bis_predictor 读取）
+inference:
+  calibrate_awake:       true
+  awake_target_bis:      95.0   # 清醒锚点
+  calib_window_sec:      60     # 累积前 60 个有效预测
+  calib_clamp:           15.0   # 偏置上限 ±15 BIS
+  calib_min_awake_pred:  75.0   # 模型自身需≥此值才校准（否则开机即麻醉，跳过）
+
+paths:
+  raw_data: "raw_data"
+  preprocessed: "outputs/preprocessed"
+  checkpoints: "outputs/checkpoints/v16"
+  logs: "outputs/logs/v16"
+  multimodal_h5: "outputs/preprocessed/dataset_v3_v13.h5"   # 复用 v13 HDF5（特征相同）

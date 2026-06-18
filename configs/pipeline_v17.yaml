@@ -1,0 +1,183 @@
+# EEG Pipeline Configuration v17 — winning recipe + validated v16-research fixes
+#
+# v17 = v16 的"已验证有效"部分集中成一次干净的全程训练：
+#   · Phase-3 永久关闭（三次实测证明多模态/蒸馏对 BIS 净劣化；EEG 骨干已最优）
+#   · enable_multimodal=false（Phase3 不跑，无需教师模块，模型更小更干净）
+#   · phase_class_weights 按药物派生相位真实分布重算（修 PhAcc 卡 66%）
+#   · uncertainty_phase_cond=true（不确定度头接相位软概率，修 recovery 过度自信）
+#   · bis_anticipate_steps=0（滞后探针证明全局前瞻有害，仅 induction 领先 ~3s，不值得）
+#
+# 对照基线：v16 ep10 vMAE 5.02 / vInd 6.65 / vRec 5.19 / Pk 0.77 / PhAcc 66%。
+# 关注：PhAcc 能否提上来（相位权重修正）、recovery mean_b 能否升高（不确定度修正）、
+#       vMAE 是否保持或微降。
+#
+# 命令：python scripts/train.py --config configs/pipeline_v17.yaml \
+#         --data outputs/preprocessed/dataset_v3_v13.h5
+
+eeg:
+  channels: ["BIS/EEG1_WAV", "BIS/EEG2_WAV"]
+  srate: 128
+
+labels:
+  tracks: ["BIS/BIS", "BIS/SQI", "BIS/SR"]
+  target: "BIS/BIS"
+  sqi_track: "BIS/SQI"
+  sr_track: "BIS/SR"
+
+windowing:
+  window_sec: 4
+  stride_sec: 1
+  label_lag_sec: 15
+  min_valid_label: 10
+  max_valid_label: 100
+  baseline_sec: 60
+
+normalization:
+  use_band_ratio: true
+  delta_dominance_thresh: 0.90
+  alpha_beta_band_hz: [8.0, 30.0]
+
+sqi:
+  min_score: 0.5
+  kurtosis_thresh: 5.0
+  high_freq_ratio_thresh: 0.4
+
+filters:
+  median_kernel_ms: 20
+  highpass_hz: 0.1
+  lowpass_hz: 47.0
+  notch_hz: [60.0]
+  notch_q: 30.0
+
+wavelet:
+  wavelet: "db4"
+  level: 5
+  esu_energy_thresh: 3.0
+
+features:
+  bands:
+    delta: [0.5, 4.0]
+    theta: [4.0, 8.0]
+    alpha: [8.0, 13.0]
+    beta:  [13.0, 30.0]
+    gamma: [30.0, 47.0]
+  permutation_entropy:
+    order: 6
+    delay: 1
+  sef95: true
+  lzc: true
+  bsr: true
+  bsr_thresholds_uv: [2.0, 5.0, 10.0]
+  spectral_slope: true
+  gamma_emg_ratio: true
+  sigma_power: true
+  slow_oscillation: true
+  dfa_alpha: false
+  zero_crossing_rate: true
+  hjorth_mobility: true
+  hjorth_complexity: false
+  pac: true
+
+model:
+  cnn_channels: [32, 64, 128]
+  cnn_kernel: 7
+  feature_dim: 38
+  d_model: 128
+  gru_layers: 2
+  gru_dropout: 0.15
+  lnn_backend: "gru"
+  sqi_inertia_threshold: 0.5
+  bsr_layer: true
+  grad_checkpoint: true
+
+  bis_head: "shared"
+  norm_type: "batch"
+
+  enable_multimodal: false        # Phase3 关闭 → 无需教师模块
+  bis_uncertainty: true           # P2 异方差 Laplace 头
+  uncertainty_phase_cond: true    # v17：logvar 头接相位（修 recovery 过度自信）
+
+training:
+  model_version: "v3"
+
+  seq_len: 300
+  seq_stride: 150
+
+  case_std_pct_low: 10
+  case_std_pct_high: 90
+  min_seq_std: 0.0
+  balance_bis: false
+
+  phase_source: "drug"            # P0b 药物派生相位
+
+  # Phase2 ep1 起 stim；Phase3 永不触发
+  phase2_start_epoch: 1
+  phase3_start_epoch: 9999
+
+  lambda_bis:   2.0
+  lambda_phase: 0.10
+  # v17：相位类别权重按药物分布重算（旧 [0.78,2.15,0.12,0.96] 假设 rec 1.5%）
+  phase_class_weights: [1.19, 2.16, 0.20, 0.45]
+  lambda_stim:  0.15
+
+  bis_transition_weight: 3.0
+  bis_transition_dbis:   0.02
+  bis_uncertainty:       true
+  bis_anticipate_steps:  0        # 滞后探针证明全局前瞻有害；保持 0
+  logvar_reg:            1.0e-3
+
+  # Phase3 辅助损失全关（永不触发，留 0 以防万一）
+  lambda_pkd:           0.0
+  lambda_vitald:        0.0
+  lambda_resp:          0.0
+  lambda_distill_pk:    0.0
+  lambda_distill_vital: 0.0
+  lambda_trans:         0.0
+
+  transition_boost: 2.0
+  vel_threshold:    0.2
+
+  focal_alpha:     0.5
+  stim_pos_weight: 15.0
+  focal_gamma:     2.0
+
+  use_auto_weight:  false
+  auto_weight_temp: 0.5
+
+  transition_upsample_factor: 2
+
+  batch_size: 32
+  lr: 1.0e-4
+  epochs: 60
+  patience: 20
+
+  lr_schedule: "cosine"
+  lr_eta_min: 1.0e-6
+
+  use_weight_ema:  true
+  weight_ema_decay: 0.999
+
+  stim_warmup_epochs:   5
+  phase3_warmup_epochs: 5
+
+  noise_std: 0.05
+  val_split: 0.15
+  test_split: 0.1
+  seed: 42
+  steps_per_epoch: null
+  n_prefetch: 4
+  huber_delta: 0.05
+
+inference:
+  calibrate_awake:       true
+  awake_target_bis:      95.0
+  calib_window_sec:      60
+  calib_clamp:           15.0
+  calib_min_awake_pred:  75.0
+
+paths:
+  raw_data: "raw_data"
+  preprocessed: "outputs/preprocessed"
+  checkpoints: "outputs/checkpoints/v17"
+  logs: "outputs/logs/v17"
+  multimodal_h5: "outputs/preprocessed/dataset_v3_v13.h5"

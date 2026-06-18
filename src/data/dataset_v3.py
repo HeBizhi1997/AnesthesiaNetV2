@@ -158,21 +158,26 @@ def build_multimodal_hdf5(
     """
     from .stim_labeler import augment_hdf5_with_stim_cv
     from .pk_model import augment_hdf5_with_pk
+    from .phase_labeler import augment_hdf5_with_drug_phases
 
     if verbose:
         print("=== Building multimodal HDF5 annotations ===")
 
     if verbose:
-        print("\n[1/3] Cardiovascular stimulation labels...")
+        print("\n[1/4] Cardiovascular stimulation labels...")
     augment_hdf5_with_stim_cv(h5_path, raw_data_dir, verbose=verbose)
 
     if verbose:
-        print("\n[2/3] PK/PD features...")
+        print("\n[2/4] PK/PD features...")
     augment_hdf5_with_pk(h5_path, raw_data_dir, verbose=verbose)
 
     if verbose:
-        print("\n[3/3] Vital signs features...")
+        print("\n[3/4] Vital signs features...")
     augment_hdf5_with_vitals(h5_path, raw_data_dir, verbose=verbose)
+
+    if verbose:
+        print("\n[4/4] Drug-derived phase labels (P0b)...")
+    augment_hdf5_with_drug_phases(h5_path, verbose=verbose)
 
     if verbose:
         print("\n=== Multimodal annotation complete ===")
@@ -206,12 +211,14 @@ class SequenceDatasetV3(Dataset):
         noise_std: float = 0.05,
         cache_in_memory: bool = True,
         min_seq_std: float = 0.0,
+        phase_source: str = "bis",   # "bis"(legacy) | "drug"(P0b, decircularized)
     ):
         self.seq_len    = seq_len
         self.seq_stride = seq_stride if seq_stride is not None else 1
         self.augment    = augment
         self.noise_std  = noise_std
         self.cache_in_memory = cache_in_memory
+        self.phase_source = phase_source
 
         self._cache: Dict[str, Dict[str, np.ndarray]] = {}
         self._index: List[Tuple[str, int]] = []
@@ -234,7 +241,11 @@ class SequenceDatasetV3(Dataset):
                         "labels":   grp["labels"][:].astype(np.float32),
                     }
                     # 原有多任务标签
-                    if "phases" in grp:
+                    # P0b：phase_source="drug" 优先用药物轨迹派生的 phases_drug
+                    # （脱离 BIS→phase→BIS 循环），缺失时回退 BIS 派生 phases。
+                    if phase_source == "drug" and "phases_drug" in grp:
+                        entry["phases"]      = grp["phases_drug"][:].astype(np.int64)
+                    elif "phases" in grp:
                         entry["phases"]      = grp["phases"][:].astype(np.int64)
                     if "stim_events" in grp:
                         entry["stim_events"] = grp["stim_events"][:].astype(np.float32)
@@ -400,6 +411,7 @@ def build_datasets_v3(
     case_std_pct_high: float = 90.0,
     transition_boost: int    = 0,
     rebuild_multimodal: bool = False,
+    phase_source: str        = "bis",
 ) -> Tuple[Dataset, Dataset, Dataset]:
     """
     构建多模态训练/验证/测试数据集（患者级别划分，无数据泄漏）。
@@ -408,10 +420,18 @@ def build_datasets_v3(
     ----------
     rebuild_multimodal : 强制重新计算多模态标签（否则跳过已存在的数据集）
     transition_boost   : 对高 CE velocity 序列的额外采样倍数（替代 induction_boost）
+    phase_source       : "bis"(legacy) | "drug"(P0b：药物轨迹派生 phases，破除循环标签)
     """
     # 先确保 HDF5 中有多模态标签
     if rebuild_multimodal or not _check_multimodal_ready(h5_path):
         build_multimodal_hdf5(h5_path, raw_data_dir, verbose=True)
+
+    # P0b：phase_source="drug" 时确保 phases_drug 存在（已多模态但旧 HDF5 可能缺）
+    if phase_source == "drug":
+        from .phase_labeler import augment_hdf5_with_drug_phases
+        if not _check_drug_phases_ready(h5_path):
+            print("Building drug-derived phase labels (phases_drug)…")
+            augment_hdf5_with_drug_phases(h5_path, verbose=True)
 
     # 案例质量过滤 + 患者级别划分
     with h5py.File(h5_path, "r") as f:
@@ -438,9 +458,10 @@ def build_datasets_v3(
 
     kw_train = dict(seq_len=seq_len, seq_stride=seq_stride, augment=True,
                     noise_std=noise_std, cache_in_memory=cache_in_memory,
-                    min_seq_std=min_seq_std)
+                    min_seq_std=min_seq_std, phase_source=phase_source)
     kw_eval  = dict(seq_len=seq_len, seq_stride=seq_stride, augment=False,
-                    cache_in_memory=cache_in_memory, min_seq_std=0.0)
+                    cache_in_memory=cache_in_memory, min_seq_std=0.0,
+                    phase_source=phase_source)
 
     train_ds = SequenceDatasetV3(h5_path, train_ids, **kw_train)
     val_ds   = SequenceDatasetV3(h5_path, val_ids,   **kw_eval)
@@ -462,5 +483,15 @@ def _check_multimodal_ready(h5_path: str) -> bool:
                 return False
             grp = f[cids[0]]
             return "drug_ce" in grp and "stim_cv" in grp and "vitals" in grp
+    except Exception:
+        return False
+
+
+def _check_drug_phases_ready(h5_path: str) -> bool:
+    """检查 HDF5 是否已包含 phases_drug（P0b 药物派生相位）。"""
+    try:
+        with h5py.File(h5_path, "r") as f:
+            cids = list(f.keys())
+            return bool(cids) and "phases_drug" in f[cids[0]]
     except Exception:
         return False

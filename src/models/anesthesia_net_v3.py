@@ -185,10 +185,18 @@ class AnesthesiaNetV3(nn.Module):
         pk_hidden: int         = 64,
         vital_hidden: int      = 64,
         d_proj: int            = 64,   # 蒸馏投影维度
+        # v16 新增
+        distill_mode: str      = "byol",    # "byol"(特征对齐,已验证无效) | "response"(响应蒸馏)
+        bis_uncertainty: bool  = False,     # True=输出异方差不确定性(Laplace 尺度 log b)
+        # v17 新增
+        uncertainty_phase_cond: bool = False,  # logvar 头额外接相位软概率（修 recovery 过度自信）
     ):
         super().__init__()
         cnn_channels = cnn_channels or [32, 64, 128]
         self.enable_multimodal = enable_multimodal
+        self.distill_mode      = distill_mode
+        self.bis_uncertainty   = bis_uncertainty
+        self.uncertainty_phase_cond = uncertainty_phase_cond
 
         # ── EEG 编码器（复用 v2 WaveformEncoder）────────────────────────────
         self.wave_enc = WaveformEncoder(
@@ -239,20 +247,40 @@ class AnesthesiaNetV3(nn.Module):
         else:
             self.bis_head = PhaseGatedBISHead(d_model, self.N_PHASES)
 
+        # ── v16：异方差不确定性头（Laplace 尺度 log b）────────────────────────
+        # 与 bis_head 解耦的独立 MLP，从 h_seq 直接回归 log b（对数尺度参数）。
+        # 临床意义：诱导/复苏等过渡区天然高不确定性，预测带可信区间比单点更有价值；
+        # 训练上 Laplace NLL 自动按不确定度调节各时步权重，对准高误差过渡段。
+        if bis_uncertainty:
+            # v17：可选接入相位软概率，让不确定度头能学到 recovery/induction 更难
+            logvar_in = d_model + (self.N_PHASES if uncertainty_phase_cond else 0)
+            self.logvar_head = nn.Sequential(
+                nn.Linear(logvar_in, d_model // 2), nn.GELU(),
+                nn.Linear(d_model // 2, 1),
+            )
+        else:
+            self.logvar_head = None
+
         # ── v3 多模态教师网络（仅 enable_multimodal=True 时构建）────────────
-        # v14 诊断：Phase-3 蒸馏对 BIS MAE 无增益且拖垮 StAUC（见 training_history）。
+        # v14 诊断：Phase-3 BYOL 蒸馏对 BIS MAE 无增益且拖垮 StAUC（见 training_history）。
+        # v16：distill_mode="response" 改为响应蒸馏——教师头直接预测 BIS（强监督），
+        #      学生 pred_bis 被拉向教师的（detach）软预测，替代失效的特征对齐。
         # EEG-only 训练时置 None，节省参数且 forward 安全跳过。
         if enable_multimodal:
             self.pk_enc     = PKEncoder(in_dim=6, hidden=pk_hidden, d_pk=pk_hidden)
             self.vital_enc  = VitalEncoder(in_dim=5, hidden=vital_hidden, d_v=vital_hidden)
             self.pkd_head   = PKDHead(d_pk=pk_hidden)
             self.vitald_head = VitalDHead(d_vital=vital_hidden)  # v3 fix: gives VitalEncoder gradient
-            self.distill = CrossModalDistillation(
-                d_student=d_model,
-                d_pk=pk_hidden,
-                d_vital=vital_hidden,
-                d_proj=d_proj,
-            )
+            if distill_mode == "byol":
+                self.distill = CrossModalDistillation(
+                    d_student=d_model,
+                    d_pk=pk_hidden,
+                    d_vital=vital_hidden,
+                    d_proj=d_proj,
+                )
+            else:
+                # response 模式无投影头；教师融合为算术加权，无额外参数
+                self.distill = None
         else:
             self.pk_enc = self.vital_enc = self.pkd_head = None
             self.vitald_head = self.distill = None
@@ -332,6 +360,14 @@ class AnesthesiaNetV3(nn.Module):
             "h":            h,
         }
 
+        # v16：异方差不确定性（Laplace log b，clamp 防数值爆炸）
+        # v17：可选把相位软概率拼入输入，使 recovery/induction 能学到更高不确定度
+        if self.logvar_head is not None:
+            logvar_in = (torch.cat([h_seq, phase_probs], dim=-1)
+                         if self.uncertainty_phase_cond else h_seq)
+            pred_logb = self.logvar_head(logvar_in).clamp(-6.0, 2.0)  # (B, T, 1)
+            out["pred_logvar"] = pred_logb
+
         # ── 多模态训练分支（推理时 / enable_multimodal=False 时跳过）────────
         if drug_ce is not None and self.pk_enc is not None:
             h_pk    = self.pk_enc(drug_ce)                      # (B, T, d_pk)
@@ -350,15 +386,30 @@ class AnesthesiaNetV3(nn.Module):
                 h_vital = None
                 mask_v = None
 
-            # 跨模态蒸馏（PK 始终运行，Vital 仅在 use_vital 时运行）
-            loss_pk, loss_vital, reg_pk, reg_vital = self.distill(
-                h_seq, h_pk, h_vital, mask_d, mask_v
-            )
-            out["loss_distill_pk"]    = loss_pk
-            if loss_vital is not None:
-                out["loss_distill_vital"] = loss_vital
-                out["reg_distill_vital"]  = reg_vital
-            out["reg_distill_pk"]     = reg_pk
+            if self.distill_mode == "response":
+                # ── v16 响应蒸馏：融合教师 BIS 预测（逐时步、按可用性掩码加权）──
+                # 教师头(pkd/vitald)由 L_pkd/L_vitald 用真实 BIS 直接监督 → 是强教师；
+                # 学生 pred_bis 在 loss 中被拉向 bis_teacher.detach()（梯度只入 EEG 学生）。
+                w_d = mask_d.unsqueeze(-1)                      # (B, T, 1)
+                t_num = bis_pkd * w_d
+                t_den = w_d.clone()
+                if h_vital is not None:
+                    w_v = mask_v.unsqueeze(-1)
+                    t_num = t_num + bis_vitald * w_v
+                    t_den = t_den + w_v
+                bis_teacher = t_num / t_den.clamp(min=1e-6)     # (B, T, 1)
+                out["bis_teacher"] = bis_teacher
+                out["mask_resp"]   = (t_den.squeeze(-1) > 1e-6).float()  # (B, T)
+            else:
+                # ── BYOL 特征对齐（保留兼容；已验证无效，v16 默认不用）──────
+                loss_pk, loss_vital, reg_pk, reg_vital = self.distill(
+                    h_seq, h_pk, h_vital, mask_d, mask_v
+                )
+                out["loss_distill_pk"]    = loss_pk
+                if loss_vital is not None:
+                    out["loss_distill_vital"] = loss_vital
+                    out["reg_distill_vital"]  = reg_vital
+                out["reg_distill_pk"]     = reg_pk
 
         return out
 
@@ -388,4 +439,7 @@ class AnesthesiaNetV3(nn.Module):
             pk_hidden=m.get("pk_hidden", 64),
             vital_hidden=m.get("vital_hidden", 64),
             d_proj=m.get("d_proj", 64),
+            distill_mode=m.get("distill_mode", "byol"),
+            bis_uncertainty=m.get("bis_uncertainty", False),
+            uncertainty_phase_cond=m.get("uncertainty_phase_cond", False),
         )

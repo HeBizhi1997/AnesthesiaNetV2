@@ -1,0 +1,28 @@
+C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\requests\__init__.py:113: RequestsDependencyWarning: urllib3 (2.6.2) or chardet (7.4.3)/charset_normalizer (3.4.4) doesn't match a supported version!
+  warnings.warn(
+[2026-06-13 14:00:42][MODEL] Model: AnesthesiaNetV3  parameters: 565,034  config=configs/pipeline_v16.yaml
+torch.compile disabled (Triton not supported on Windows)
+Case filter (BIS std p10-p90, 7.8-16.7): kept 1399/1749 (removed 350)
+Patient split ¡ª train: 1051, val: 209, test: 139
+Loading multimodal dataset into RAM¡­
+Transition boost x2: added 72,082 sequences (total 139,848)
+  train: 139,848, val: 14,311, test: 8,847
+[2026-06-13 14:04:10][DATA] V3 DataLoader: train=139,848  val=14,311  workers=0  prefetch=4  h5=outputs/preprocessed/dataset_v3_v13.h5
+AMP enabled: torch.bfloat16
+[2026-06-13 14:04:11][RESUME] Resumed from epoch 10  best_val_MAE=5.02  val_loss=-3.9642
+
+==================================================================================================================================
+[2026-06-13 14:04:11][START] MERIDIAN (AnesthesiaNetV3) Training Start
+[2026-06-13 14:04:11][CONFIG] device=cuda  AMP=True(torch.bfloat16)
+[2026-06-13 14:04:11][CONFIG] params=565,034  epochs=60  patience=20  lr=9.34e-05  batch=32
+[2026-06-13 14:04:11][CURRICULUM] Phase1: ep1-0  Phase2: ep1-9998  Phase3: ep9999+
+[2026-06-13 14:04:11][CONFIG] steps/epoch=4,371  train_seqs=139,848  val_seqs=14,311
+==================================================================================================================================
+Timestamp              Ep   Ph   TotLoss      BIS    Phase     Stim      PKD   VitalD   DistPK  DistVit    RegPK   RegVit    Trans    vMAE    vEMA    vInd    vRec   PhAcc   StAUC      Sp      Pk         LR     SPS  train_t  val_t  flag
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+[2026-06-13 14:04:11][EPOCH] Epoch 11/60 train start  phase=2  (elapsed=0:00:00)
+[2026-06-13 14:19:26][TRAIN] Epoch 11 train done  915s  loss=-4.5609  bis=-2.3205  phase=0.7372  stim=0.0428  pkd=0.0000  vd=0.0000  dp=0.0000  dv=0.0000  resp=0.0000  trans=0.0000  sps=47210
+[2026-06-13 14:19:26][EPOCH] Epoch 11/60 val start
+2026-06-13 14:19:48    11  Ph2   -4.5609  -2.3205   0.7372   0.0428   0.0000   0.0000   0.0000   0.0000   0.0000   0.0000   0.0000    5.02    5.02    6.44    5.21   66.4%   0.796   0.737   0.769   9.20e-05   47210     915s    22s    ni=0/20
+[2026-06-13 14:19:48][VAL] Epoch 11 val done  22s  vMAE=5.02  EMA=5.02  vInd=6.44  vRec=5.21  PhAcc=66.4%  StAUC=0.796  Sp=0.737  Pk=0.769  ni=0/20  elapsed=0:15:36  eta=12:45:12
+[2026-06-13 14:19:48][EPOCH] Epoch 12/60 train start  phase=2  (elapsed=0:15:36)

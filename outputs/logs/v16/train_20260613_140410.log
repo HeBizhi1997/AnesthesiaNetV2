@@ -1,0 +1,11 @@
+[2026-06-13 14:04:11][RESUME] Resumed from epoch 10  best_val_MAE=5.02  val_loss=-3.9642
+[2026-06-13 14:04:11][START] MERIDIAN (AnesthesiaNetV3) Training Start
+[2026-06-13 14:04:11][CONFIG] device=cuda  AMP=True(torch.bfloat16)
+[2026-06-13 14:04:11][CONFIG] params=565,034  epochs=60  patience=20  lr=9.34e-05  batch=32
+[2026-06-13 14:04:11][CURRICULUM] Phase1: ep1-0  Phase2: ep1-9998  Phase3: ep9999+
+[2026-06-13 14:04:11][CONFIG] steps/epoch=4,371  train_seqs=139,848  val_seqs=14,311
+[2026-06-13 14:04:11][EPOCH] Epoch 11/60 train start  phase=2  (elapsed=0:00:00)
+[2026-06-13 14:19:26][TRAIN] Epoch 11 train done  915s  loss=-4.5609  bis=-2.3205  phase=0.7372  stim=0.0428  pkd=0.0000  vd=0.0000  dp=0.0000  dv=0.0000  resp=0.0000  trans=0.0000  sps=47210
+[2026-06-13 14:19:26][EPOCH] Epoch 11/60 val start
+[2026-06-13 14:19:48][VAL] Epoch 11 val done  22s  vMAE=5.02  EMA=5.02  vInd=6.44  vRec=5.21  PhAcc=66.4%  StAUC=0.796  Sp=0.737  Pk=0.769  ni=0/20  elapsed=0:15:36  eta=12:45:12
+[2026-06-13 14:19:48][EPOCH] Epoch 12/60 train start  phase=2  (elapsed=0:15:36)

@@ -1,0 +1,32 @@
+{
+  "format_version": 1,
+  "subject": "S001",
+  "note": "",
+  "started": "2026-06-15T00:46:05.9791795\u002B08:00",
+  "stopped": "2026-06-15T02:32:55.2985917\u002B08:00",
+  "eeg": {
+    "file": "eeg.bin",
+    "dtype": "\u003Cf4",
+    "unit": "uV",
+    "channels": 1,
+    "channel_note": "ADS1299 CH0 (board interleaves 8, only CH0 is the electrode)",
+    "port": "COM7",
+    "baud": 230400,
+    "nominal_rate_hz": 250,
+    "measured_rate_hz": 125.002,
+    "gain": 12,
+    "differential": true,
+    "samples": 801168,
+    "first_sample": "2026-06-15T00:46:06.0447731"
+  },
+  "ppg": {
+    "file": "ppg.bin",
+    "enabled": true,
+    "record": "[\u003Ci8 ticks][\u003Ci4 ir][\u003Ci4 red][u1 spo2][u1 hr]",
+    "record_bytes": 18,
+    "port": "COM6",
+    "baud": 57600,
+    "measured_rate_hz": 120.605,
+    "frames": 772993
+  }
+}

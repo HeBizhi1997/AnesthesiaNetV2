@@ -1,7 +1,0 @@
-[2026-05-09 10:32:01][RESUME] Resumed from epoch 16  best_val_MAE=4.90  val_loss=0.0238
-[2026-05-09 10:32:01][START] MERIDIAN (AnesthesiaNetV3) Training Start
-[2026-05-09 10:32:01][CONFIG] device=cuda  AMP=True(torch.bfloat16)
-[2026-05-09 10:32:01][CONFIG] params=622,252  epochs=200  patience=70  lr=4.53e-05  batch=32
-[2026-05-09 10:32:01][CURRICULUM] Phase1: ep1-30  Phase2: ep31-60  Phase3: ep61+
-[2026-05-09 10:32:01][CONFIG] steps/epoch=4,401  train_seqs=140,806  val_seqs=13,233
-[2026-05-09 10:32:01][EPOCH] Epoch 17/200 train start  phase=1  (elapsed=0:00:00)

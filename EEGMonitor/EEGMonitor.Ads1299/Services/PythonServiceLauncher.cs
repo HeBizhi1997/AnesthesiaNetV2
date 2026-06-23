@@ -2,6 +2,7 @@ using Ads1299Monitor.Configuration;
 using Microsoft.Extensions.Logging;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Net.Http;
 
 namespace Ads1299Monitor.Services;
@@ -48,7 +49,7 @@ public sealed class PythonServiceLauncher : IDisposable
             _logger.LogWarning("Could not locate EEGProcessingService/main.py — set Python:ServiceDirectory in appsettings.json");
             return false;
         }
-        if (!TryStartProcess(serviceDir)) return false;
+        if (!TryStartProcess(serviceDir, ResolvePythonExecutables(serviceDir))) return false;
 
         for (int i = 0; i < 40; i++)        // poll up to 20 s (model load can take a while)
         {
@@ -59,9 +60,20 @@ public sealed class PythonServiceLauncher : IDisposable
         return false;
     }
 
-    private bool TryStartProcess(string serviceDir)
+    // Prefer the project venv interpreter (EEGProcessingService/.venv) — the pinned deps
+    // (numpy/scipy/torch) only have wheels up to Python 3.12, so a bare PATH `python`
+    // (e.g. 3.14) can't run the service. Fall back to PATH executables if no venv.
+    private static string[] ResolvePythonExecutables(string serviceDir)
     {
-        foreach (var exe in PythonExecutables)
+        var venvPy = Path.Combine(serviceDir, ".venv", "Scripts", "python.exe");
+        return File.Exists(venvPy)
+            ? new[] { venvPy }.Concat(PythonExecutables).ToArray()
+            : PythonExecutables;
+    }
+
+    private bool TryStartProcess(string serviceDir, string[] executables)
+    {
+        foreach (var exe in executables)
         {
             try
             {

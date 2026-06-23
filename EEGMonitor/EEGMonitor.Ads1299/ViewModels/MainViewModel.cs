@@ -468,10 +468,17 @@ public partial class MainViewModel : ObservableObject
             s.DataLabelsPosition = PolarLabelsPosition.ChartCenter;
             s.DataLabelsFormatter = pt => $"{pt.Coordinate.PrimaryValue:0}";
             s.InnerRadius = 72;
+            // CornerRadius default is non-zero → the arc's rounded end-caps poke past the
+            // value fill as dark "blobs". Square ends render a clean ring. MaxRadialColumnWidth
+            // pins a fixed band thickness so value + background overlay exactly.
+            s.CornerRadius = 0;
+            s.MaxRadialColumnWidth = 18;
         }),
         new GaugeItem(GaugeItem.Background, s =>
         {
             s.InnerRadius = 72;
+            s.CornerRadius = 0;
+            s.MaxRadialColumnWidth = 18;
             s.Fill = new SolidColorPaint(SKColor.Parse("#1E2A38"));
         }));
 

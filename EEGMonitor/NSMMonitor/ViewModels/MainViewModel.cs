@@ -326,6 +326,10 @@ public sealed partial class MainViewModel : ObservableObject
     [ObservableProperty] private double _betaPower;
     [ObservableProperty] private double _gammaPower;
 
+    // 频带比值（线性域）：α/δ、α/β
+    [ObservableProperty] private string _alphaDeltaRatioDisplay = "--";
+    [ObservableProperty] private string _alphaBetaRatioDisplay = "--";
+
     [ObservableProperty] private string _blackImpedanceDisplay = "--";
     [ObservableProperty] private string _whiteImpedanceDisplay = "--";
     [ObservableProperty] private bool _hasElectrodeWarning;
@@ -391,6 +395,12 @@ public sealed partial class MainViewModel : ObservableObject
         AlphaPower = pkt.AlphaPowerDb;
         BetaPower  = pkt.BetaPowerDb;
         GammaPower = pkt.GammaPowerDb;
+
+        // 频带功率为 dB 值，线性比值 = 10^((dB差)/10)
+        double alphaDeltaRatio = Math.Pow(10, (pkt.AlphaPowerDb - pkt.DeltaPowerDb) / 10.0);
+        double alphaBetaRatio  = Math.Pow(10, (pkt.AlphaPowerDb - pkt.BetaPowerDb) / 10.0);
+        AlphaDeltaRatioDisplay = alphaDeltaRatio.ToString("0.00");
+        AlphaBetaRatioDisplay  = alphaBetaRatio.ToString("0.00");
 
         // 电极阻抗
         BlackImpedanceDisplay = pkt.BlackImpedance >= 15 ? "过高" : pkt.BlackImpedance.ToString();

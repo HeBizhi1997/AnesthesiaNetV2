@@ -73,6 +73,14 @@
                             <TextBlock Text="{Binding RecordElapsed}" Foreground="{StaticResource MutedBrush}" FontSize="13" Margin="8,0,0,0" VerticalAlignment="Center"/>
                         </StackPanel>
                     </Border>
+                    <!-- SQI 信号质量 — moved here from the indices panel -->
+                    <Border Background="#FF0F1A28" CornerRadius="14" Padding="12,5" Margin="6,0">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="SQI" Foreground="{StaticResource MutedBrush}" FontSize="13" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                            <TextBlock Text="{Binding SqiText}" Foreground="{StaticResource AlphaBrush}" FontSize="13" FontWeight="Bold" VerticalAlignment="Center"/>
+                            <TextBlock Text="{Binding SqiQuality}" Foreground="{StaticResource MutedBrush}" FontSize="12" Margin="6,0,0,0" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </Border>
                 </StackPanel>
 
                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
@@ -158,16 +166,10 @@
                 </Border>
 
                 <!-- 1. EEG waveforms -->
-                <Border Grid.Row="1" Grid.Column="0" Style="{StaticResource Card}">
+                <Border Grid.Row="2" Grid.Column="0" Style="{StaticResource Card}">
                     <DockPanel>
                         <DockPanel DockPanel.Dock="Top" Margin="0,0,0,4">
                             <TextBlock Text="1.  脑电波形" Style="{StaticResource PanelTitle}"/>
-                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-                                <TextBlock Text="增益" Foreground="{StaticResource MutedBrush}" FontSize="11" VerticalAlignment="Center" Margin="0,0,4,0"/>
-                                <ComboBox Width="64" SelectedIndex="0"><ComboBoxItem Content="7.5µV"/><ComboBoxItem Content="15µV"/><ComboBoxItem Content="30µV"/></ComboBox>
-                                <TextBlock Text="时间窗" Foreground="{StaticResource MutedBrush}" FontSize="11" VerticalAlignment="Center" Margin="10,0,4,0"/>
-                                <ComboBox Width="58" SelectedIndex="0"><ComboBoxItem Content="10s"/><ComboBoxItem Content="20s"/><ComboBoxItem Content="30s"/></ComboBox>
-                            </StackPanel>
                         </DockPanel>
                         <Grid>
                             <Grid.ColumnDefinitions>
@@ -211,7 +213,7 @@
                         <TextBlock DockPanel.Dock="Top" Text="2.  生命体征" Style="{StaticResource PanelTitle}"/>
                         <Grid>
                             <Grid.RowDefinitions>
-                                <RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/>
+                                <RowDefinition Height="*"/><RowDefinition Height="*"/><RowDefinition Height="*"/><RowDefinition Height="*"/><RowDefinition Height="1.6*"/>
                             </Grid.RowDefinitions>
                             <Grid.Resources>
                                 <!-- No fixed Width → the sparkline stretches to fill its * column and
@@ -255,26 +257,8 @@
                                 <ctrl:Sparkline Grid.Column="2" Values="{Binding PrvSpark}" Stroke="#FF22D3EE" Min="0" Max="100"/>
                                 <StackPanel Grid.Column="3" VerticalAlignment="Center"><TextBlock Text="100" Foreground="{StaticResource MutedBrush}" FontSize="9"/><TextBlock Text="0" Foreground="{StaticResource MutedBrush}" FontSize="9" Margin="0,14,0,0"/></StackPanel>
                             </Grid>
-                            <!-- NIBP -->
-                            <Grid Grid.Row="3">
-                                <Grid.ColumnDefinitions><ColumnDefinition Width="86"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
-                                <StackPanel Grid.Column="0" VerticalAlignment="Center"><TextBlock Text="NIBP" Foreground="{StaticResource BetaBrush}" FontWeight="Bold"/><TextBlock Text="无创血压" Foreground="{StaticResource MutedBrush}" FontSize="10"/></StackPanel>
-                                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center"><TextBlock Text="{Binding NibpText}" Foreground="{StaticResource BetaBrush}" FontSize="30" FontWeight="Bold"/><TextBlock Text="mmHg" Foreground="{StaticResource MutedBrush}" FontSize="11" VerticalAlignment="Bottom" Margin="6,0,8,6"/><TextBlock Text="{Binding MapText}" Foreground="{StaticResource MutedBrush}" FontSize="11" VerticalAlignment="Bottom" Margin="0,0,0,6"/></StackPanel>
-                            </Grid>
-                            <!-- RR -->
-                            <Grid Grid.Row="4">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="86"/>
-                                    <ColumnDefinition Width="Auto"/>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="28"/></Grid.ColumnDefinitions>
-                                <StackPanel Grid.Column="0" VerticalAlignment="Center"><TextBlock Text="RR" Foreground="{StaticResource DeltaBrush}" FontWeight="Bold"/><TextBlock Text="呼吸频率" Foreground="{StaticResource MutedBrush}" FontSize="10"/></StackPanel>
-                                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center"><TextBlock Text="{Binding RrText}" Foreground="{StaticResource DeltaBrush}" FontSize="34" FontWeight="Bold"/><TextBlock Text="rpm" Foreground="{StaticResource MutedBrush}" FontSize="11" VerticalAlignment="Bottom" Margin="4,0,0,6"/></StackPanel>
-                                <ctrl:Sparkline Grid.Column="2" Values="{Binding RrSpark}" Stroke="{StaticResource DeltaBrush}" Min="0" Max="30"/>
-                                <StackPanel Grid.Column="3" VerticalAlignment="Center"><TextBlock Text="30" Foreground="{StaticResource MutedBrush}" FontSize="9"/><TextBlock Text="0" Foreground="{StaticResource MutedBrush}" FontSize="9" Margin="0,14,0,0"/></StackPanel>
-                            </Grid>
                             <!-- TPI -->
-                            <Grid Grid.Row="5">
+                            <Grid Grid.Row="3">
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="86"/>
                                     <ColumnDefinition Width="Auto"/>
@@ -285,14 +269,23 @@
                                 <ctrl:Sparkline Grid.Column="2" Values="{Binding TpiSpark}" Stroke="#FFA855F7" Min="0" Max="20"/>
                                 <StackPanel Grid.Column="3" VerticalAlignment="Center"><TextBlock Text="20" Foreground="{StaticResource MutedBrush}" FontSize="9"/><TextBlock Text="0" Foreground="{StaticResource MutedBrush}" FontSize="9" Margin="0,14,0,0"/></StackPanel>
                             </Grid>
+                            <!-- 原始脉搏波 (PPG IR 光体积描记波) -->
+                            <Grid Grid.Row="4">
+                                <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+                                <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="2,2,0,2">
+                                    <TextBlock Text="脉搏波" Foreground="#FF22D3A6" FontWeight="Bold"/>
+                                    <TextBlock Text="原始 PPG" Foreground="{StaticResource MutedBrush}" FontSize="10" VerticalAlignment="Bottom" Margin="6,0,0,2"/>
+                                </StackPanel>
+                                <ctrl:Sparkline Grid.Row="1" Values="{Binding PulseWave}" Stroke="#FF22D3A6"/>
+                            </Grid>
                         </Grid>
                     </DockPanel>
                 </Border>
 
                 <!-- 3. Indices -->
-                <Border Grid.Row="2" Grid.Column="0" Style="{StaticResource Card}">
+                <Border Grid.Row="1" Grid.Column="0" Style="{StaticResource Card}">
                     <DockPanel>
-                        <TextBlock DockPanel.Dock="Top" Text="3.  意识指标 &amp; 信号质量" Style="{StaticResource PanelTitle}"/>
+                        <TextBlock DockPanel.Dock="Top" Text="3.  意识 &amp; 伤害感受指标" Style="{StaticResource PanelTitle}"/>
                         <Grid>
                             <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition/><ColumnDefinition/></Grid.ColumnDefinitions>
                             <!-- qCON -->
@@ -329,20 +322,20 @@
                                     </StackPanel>
                                 </Grid>
                             </Border>
-                            <!-- SQI -->
+                            <!-- SPI (伤害感受指数, from PPG 指夹模组) -->
                             <Grid Grid.Column="2">
                                 <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
                                 <StackPanel Grid.Row="0" HorizontalAlignment="Center">
-                                    <TextBlock Text="SQI" Foreground="{StaticResource TextBrush}" FontWeight="Bold" HorizontalAlignment="Center"/>
-                                    <TextBlock Text="信号质量指数" Foreground="{StaticResource MutedBrush}" FontSize="10" HorizontalAlignment="Center"/>
+                                    <TextBlock Text="SPI" Foreground="{StaticResource TextBrush}" FontWeight="Bold" HorizontalAlignment="Center"/>
+                                    <TextBlock Text="伤害感受指数" Foreground="{StaticResource MutedBrush}" FontSize="10" HorizontalAlignment="Center"/>
                                 </StackPanel>
                                 <StackPanel Grid.Row="1" VerticalAlignment="Center" HorizontalAlignment="Center" Orientation="Horizontal">
-                                    <TextBlock Text="{Binding SqiText}" Foreground="{StaticResource AlphaBrush}" FontSize="56" FontWeight="Bold"/>
+                                    <TextBlock Text="{Binding SpiText}" Foreground="{StaticResource BetaBrush}" FontSize="56" FontWeight="Bold"/>
                                     <TextBlock Text="/100" Foreground="{StaticResource MutedBrush}" FontSize="14" VerticalAlignment="Bottom" Margin="4,0,0,10"/>
                                 </StackPanel>
                                 <StackPanel Grid.Row="2" HorizontalAlignment="Center">
-                                    <ProgressBar Width="130" Height="6" Minimum="0" Maximum="100" Value="{Binding Sqi}" Background="#FF152033" Foreground="{StaticResource AlphaBrush}" BorderThickness="0"/>
-                                    <TextBlock Margin="0,6,0,0" HorizontalAlignment="Center"><Run Text="信号质量: " Foreground="#FF7D8B9A"/><Run Text="{Binding SqiQuality}" Foreground="#FF22C55E"/></TextBlock>
+                                    <ProgressBar Width="130" Height="6" Minimum="0" Maximum="100" Value="{Binding Spi}" Background="#FF152033" Foreground="{StaticResource BetaBrush}" BorderThickness="0"/>
+                                    <TextBlock Margin="0,6,0,0" HorizontalAlignment="Center"><Run Text="镇痛: " Foreground="#FF7D8B9A"/><Run Text="{Binding SpiStatus}" Foreground="#FFF59E0B"/></TextBlock>
                                 </StackPanel>
                             </Grid>
                         </Grid>
@@ -375,9 +368,7 @@
                             <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
                                 <CheckBox Content="qCON" IsChecked="{Binding ShowQcon}" Foreground="#FF3B82F6" Margin="6,0"/>
                                 <CheckBox Content="qNOX" IsChecked="{Binding ShowQnox}" Foreground="#FFF59E0B" Margin="6,0"/>
-                                <CheckBox Content="SQI" IsChecked="{Binding ShowSqi}" Foreground="#FF22C55E" Margin="6,0"/>
-                                <CheckBox Content="PR" IsChecked="{Binding ShowPr}" Foreground="#FFEF4444" Margin="6,0"/>
-                                <CheckBox Content="SPO₂" IsChecked="{Binding ShowSpo2}" Foreground="#FF38BDF8" Margin="6,0"/>
+                                <CheckBox Content="SPI" IsChecked="{Binding ShowSpi}" Foreground="#FFA855F7" Margin="6,0"/>
                             </StackPanel>
                         </DockPanel>
                         <lvc:CartesianChart Series="{Binding TrendSeries}" XAxes="{Binding TrendXAxes}"

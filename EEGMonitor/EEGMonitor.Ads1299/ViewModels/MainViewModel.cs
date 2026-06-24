@@ -79,6 +79,12 @@ public partial class MainViewModel : ObservableObject
     [ObservableProperty] private string _sqiText = "--";
     [ObservableProperty] private string _sqiQuality = "--";
 
+    // SPI 伤害感受指数 (Surgical Pleth Index) — PPG-derived, replaces SQI in the indices panel.
+    [ObservableProperty] private double _spi;
+    [ObservableProperty] private string _spiText = "--";
+    [ObservableProperty] private string _spiStatus = "--";
+    private readonly List<double> _hbiRoll = new(), _ppgaRoll = new();   // for SPI histogram normalisation
+
     // ── Band % ──
     [ObservableProperty] private string _deltaPct = "--";
     [ObservableProperty] private string _thetaPct = "--";
@@ -104,19 +110,15 @@ public partial class MainViewModel : ObservableObject
     public ObservableCollection<RectangularSection> TrendSections { get; } = new();
 
     // Trend series refs so the legend checkboxes can show/hide each line.
-    private LineSeries<ObservablePoint> _sQcon = null!, _sQnox = null!, _sSqi = null!, _sSpo2 = null!, _sPr = null!;
+    private LineSeries<ObservablePoint> _sQcon = null!, _sQnox = null!, _sSpi = null!;
 
     // Bound to the trend-legend checkboxes (defaults match the previous static IsChecked states).
     [ObservableProperty] private bool _showQcon = true;
     [ObservableProperty] private bool _showQnox = true;
-    [ObservableProperty] private bool _showSqi = true;
-    [ObservableProperty] private bool _showPr = true;
-    [ObservableProperty] private bool _showSpo2 = true;
+    [ObservableProperty] private bool _showSpi = true;
     partial void OnShowQconChanged(bool v) => _sQcon.IsVisible = v;
     partial void OnShowQnoxChanged(bool v) => _sQnox.IsVisible = v;
-    partial void OnShowSqiChanged(bool v) => _sSqi.IsVisible = v;
-    partial void OnShowPrChanged(bool v) => _sPr.IsVisible = v;
-    partial void OnShowSpo2Changed(bool v) => _sSpo2.IsVisible = v;
+    partial void OnShowSpiChanged(bool v) => _sSpi.IsVisible = v;
 
     public ISeries[] DonutSeries { get; }
     public ISeries[] QConGauge { get; }
@@ -127,8 +129,13 @@ public partial class MainViewModel : ObservableObject
     private readonly List<double>[] _laneBuf = { new(), new(), new(), new(), new(), new() };
     private readonly LineSeries<ObservablePoint>[] _lane = new LineSeries<ObservablePoint>[Lanes];
 
-    private readonly ObservableCollection<ObservablePoint> _trQcon = new(), _trQnox = new(),
-        _trSqi = new(), _trHr = new(), _trSpo2 = new();
+    private readonly ObservableCollection<ObservablePoint> _trQcon = new(), _trQnox = new(), _trSpi = new();
+
+    // 原始脉搏波 (PPG IR) rolling display buffer.
+    private readonly object _pulseLock = new();
+    private readonly List<double> _pulseRoll = new();
+    private int _pulseDecim;
+    [ObservableProperty] private IReadOnlyList<double>? _pulseWave;
 
     private readonly ObservableValue _dDelta = new(0), _dTheta = new(0), _dAlpha = new(0), _dBeta = new(0), _dGamma = new(0);
     private readonly ObservableValue _qConVal = new(0), _qNoxVal = new(0);
@@ -165,14 +172,11 @@ public partial class MainViewModel : ObservableObject
         EegXAxes = new[] { Hidden() };
         EegYAxes = new[] { new Axis { MinLimit = 0, MaxLimit = Lanes, LabelsPaint = null, SeparatorsPaint = null, ShowSeparatorLines = false } };
 
-        // Trend
+        // Trend (qCON / qNOX / SPI — all 0–100 on the left axis)
         _sQcon = TrendLine(_trQcon, "qCON", "#3B82F6", 0);
         _sQnox = TrendLine(_trQnox, "qNOX", "#F59E0B", 0);
-        _sSqi  = TrendLine(_trSqi,  "SQI",  "#22C55E", 0);
-        _sSpo2 = TrendLine(_trSpo2, "SpO₂", "#38BDF8", 0);
-        _sPr   = TrendLine(_trHr,   "PR",   "#EF4444", 1);
-        _sSpo2.IsVisible = ShowSpo2;      // SpO₂ off by default (matches the checkbox)
-        TrendSeries = new ISeries[] { _sQcon, _sQnox, _sSqi, _sSpo2, _sPr };
+        _sSpi  = TrendLine(_trSpi,  "SPI",  "#A855F7", 0);
+        TrendSeries = new ISeries[] { _sQcon, _sQnox, _sSpi };
         // Trend X = wall-clock time axis (aligns data + event markers for intuitive review)
         TrendXAxes = new[]
         {
@@ -187,8 +191,6 @@ public partial class MainViewModel : ObservableObject
         {
             new Axis { MinLimit = 0, MaxLimit = 100, LabelsPaint = Paint("#7D8B9A"), TextSize = 11,
                        SeparatorsPaint = new SolidColorPaint(SKColor.Parse("#16202C"), 1) },
-            new Axis { MinLimit = 40, MaxLimit = 160, Position = AxisPosition.End,
-                       LabelsPaint = Paint("#EF4444"), TextSize = 11, ShowSeparatorLines = false },   // 右轴=PR(红)
         };
 
         // Donut
@@ -206,7 +208,7 @@ public partial class MainViewModel : ObservableObject
         _pipeline.ResultAvailable += r => OnUi(() => OnResult(r));
         _pulse.BpmReceived += OnBpm;
         _ppg.ReadingReceived += OnPpg;
-        _ppg.RawSampleReceived += (ts, ir, red) => _recording.RecordRawPpg(ts, ir, red);   // 无损存原始 PPG 波
+        _ppg.RawSampleReceived += OnPpgRaw;   // 无损存原始 PPG 波 + 脉搏波显示
 
         _clock = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
         _clock.Tick += (_, _) =>
@@ -334,8 +336,14 @@ public partial class MainViewModel : ObservableObject
 
         if (valid)
         {
-            if (!double.IsNaN(r.BIS)) { _qConVal.Value = r.BIS; QConStatus = ConsciousnessStatus(r.BIS); }
-            if (r.FNox.HasValue) { _qNoxVal.Value = r.FNox.Value; QNoxStatus = DepthStatus(r.FNox.Value); }
+            if (!double.IsNaN(r.BIS))
+            {
+                _qConVal.Value = r.BIS; QConStatus = ConsciousnessStatus(r.BIS);
+                // qNOX is no longer taken from the model's fnox; it is derived from qCON via the
+                // CONOX linear relationship (see DeriveQnox).
+                double qnox = DeriveQnox(r.BIS);
+                _qNoxVal.Value = qnox; QNoxStatus = DepthStatus(qnox);
+            }
         }
         else
         {
@@ -367,11 +375,7 @@ public partial class MainViewModel : ObservableObject
         // 脉率 PR / SpO₂ / PRV / 灌注指数 come from the PPG 指夹模组 (see OnPpg); not the EEG result.
 
         UpdateEeg(r);
-        if (valid && !double.IsNaN(r.BIS)) AddTrend(_trQcon, r.BIS);
-        if (valid && r.FNox.HasValue) AddTrend(_trQnox, r.FNox.Value);
-        if (valid) AddTrend(_trSqi, r.SQI);                  // no SQI point while invalid → line holds, doesn't jitter
-        // PR / SpO₂ trends are driven by the PPG module in OnPpg, so they keep updating even when
-        // the EEG board sends nothing (this method wouldn't run at all in that case).
+        if (valid && !double.IsNaN(r.BIS)) { AddTrend(_trQcon, r.BIS); AddTrend(_trQnox, DeriveQnox(r.BIS)); }
     }
 
     // ── PPG 指夹模组: 脉率 PR + 脉率变异性 PRV + 血氧 SpO₂ + 灌注指数 PI ──
@@ -380,21 +384,47 @@ public partial class MainViewModel : ObservableObject
         double pr = r.Pr > 0 ? r.Pr : r.DeviceHr;            // computed PR; fall back to device reading
         OnUi(() =>
         {
-            // Vitals card + trend are BOTH driven here, independent of the EEG pipeline.
-            if (pr > 0) { PrText = Math.Round(pr).ToString("0"); Push(_prRoll, pr, v => PrSpark = v); AddTrend(_trHr, pr); }
-            if (r.Spo2 > 0) { Spo2Text = r.Spo2.ToString(); Push(_spo2Roll, r.Spo2, v => Spo2Spark = v); AddTrend(_trSpo2, r.Spo2); }
+            // Vitals cards driven here, independent of the EEG pipeline. (PR/SpO₂ trend lines removed.)
+            if (pr > 0) { PrText = Math.Round(pr).ToString("0"); Push(_prRoll, pr, v => PrSpark = v); }
+            if (r.Spo2 > 0) { Spo2Text = r.Spo2.ToString(); Push(_spo2Roll, r.Spo2, v => Spo2Spark = v); }
             if (r.Prv > 0) { PrvText = $"{r.Prv:0}"; Push(_prvRoll, r.Prv, v => PrvSpark = v); }
             if (r.Pi > 0) { TpiText = $"{r.Pi:0.0}"; Push(_piRoll, r.Pi, v => TpiSpark = v); }
+
+            // SPI 伤害感受指数 = 100 − (0.7·PPGAnorm + 0.3·HBInorm).  PPGA≈灌注指数(脉搏波幅),
+            // HBI=心搏间期(60000/脉率 ms);两者按滚动百分位归一到 0–100(SPI 的“直方图变换”)。
+            if (pr > 0 && r.Pi > 0)
+            {
+                double ppgaNorm = PushPercentile(_ppgaRoll, r.Pi);
+                double hbiNorm = PushPercentile(_hbiRoll, 60000.0 / pr);
+                double spi = Math.Clamp(100.0 - (0.7 * ppgaNorm + 0.3 * hbiNorm), 0, 100);
+                Spi = spi; SpiText = $"{Math.Round(spi)}"; SpiStatus = SpiStatusText(spi);
+                AddTrend(_trSpi, spi);
+            }
         });
         if (pr > 0) _pipeline.CurrentHeartRate = (int)Math.Round(pr);
         _recording.RecordRawVital(r.Time, pr, r.Spo2, r.Pi);
+    }
+
+    // 原始 PPG 帧 (~125 Hz, PPG 线程): 无损录制 + 喂入脉搏波显示缓冲。逐样本刷 UI 太频繁,
+    // 因此每 8 个样本(~15 Hz)推送一次最近 ~4 s 的快照给 PulseWave。
+    private void OnPpgRaw(DateTime ts, int ir, int red)
+    {
+        _recording.RecordRawPpg(ts, ir, red);
+        double[]? snap = null;
+        lock (_pulseLock)
+        {
+            _pulseRoll.Add(ir);
+            if (_pulseRoll.Count > 500) _pulseRoll.RemoveAt(0);
+            if (++_pulseDecim >= 8) { _pulseDecim = 0; snap = _pulseRoll.ToArray(); }
+        }
+        if (snap != null) OnUi(() => PulseWave = snap);
     }
 
     // Legacy HKG-07D pulse sensor (PulseEnabled=false by default). When active and no PPG
     // module is present, it can still drive the PR display.
     private void OnBpm(int bpm)
     {
-        OnUi(() => { if (bpm > 0) { PrText = bpm.ToString(); _pipeline.CurrentHeartRate = bpm; Push(_prRoll, bpm, v => PrSpark = v); AddTrend(_trHr, bpm); } });
+        OnUi(() => { if (bpm > 0) { PrText = bpm.ToString(); _pipeline.CurrentHeartRate = bpm; Push(_prRoll, bpm, v => PrSpark = v); } });
         if (bpm > 0) _recording.RecordRawVital(DateTime.Now, bpm, 0, 0);
     }
 
@@ -402,6 +432,18 @@ public partial class MainViewModel : ObservableObject
     {
         roll.Add(v); if (roll.Count > 120) roll.RemoveAt(0); set(roll.ToArray());
     }
+
+    // Percentile rank (0–100) of v within a rolling ~5 min window — SPI's histogram normalisation.
+    private static double PushPercentile(List<double> roll, double v)
+    {
+        roll.Add(v); if (roll.Count > 300) roll.RemoveAt(0);   // ~5 min @ 1 Hz
+        if (roll.Count < 5) return 50.0;                        // too little history → neutral
+        int below = 0; for (int i = 0; i < roll.Count; i++) if (roll[i] < v) below++;
+        return 100.0 * below / roll.Count;
+    }
+
+    // SPI 目标区间 20–50 为镇痛适当;>50 提示伤害感受↑(镇痛不足),<20 提示镇痛偏深。
+    private static string SpiStatusText(double v) => v > 50 ? "镇痛不足" : v >= 20 ? "适当" : "镇痛偏深";
 
     private void AddTrend(ObservableCollection<ObservablePoint> s, double v)
     {
@@ -481,6 +523,12 @@ public partial class MainViewModel : ObservableObject
             s.MaxRadialColumnWidth = 18;
             s.Fill = new SolidColorPaint(SKColor.Parse("#1E2A38"));
         }));
+
+    // qNOX derived from qCON via the CONOX (qCON 2000) population relationship
+    // qCON = 0.79·qNOX + 5.8 (Melia et al., R²=0.84) ⇒ qNOX = (qCON − 5.8)/0.79.
+    // Clamped to the 0–99 index range. NOTE: this is a statistical correlation, not the
+    // device's true independent nociception algorithm — individual error can be large.
+    private static double DeriveQnox(double qcon) => Math.Clamp((qcon - 5.8) / 0.79, 0, 99);
 
     private static string ConsciousnessStatus(double v) =>
         v >= 80 ? "清醒" : v >= 60 ? "轻度镇静" : v >= 40 ? "中度抑制" : v >= 20 ? "深度抑制" : "爆发抑制";

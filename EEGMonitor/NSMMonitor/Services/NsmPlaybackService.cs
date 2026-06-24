@@ -6,12 +6,23 @@ using NSMMonitor.Models;
 namespace NSMMonitor.Services;
 
 /// <summary>
-/// NSM 文件回放服务：读取录制的 .nsm（JSON Lines）文件，
-/// 按数据包原始时间间隔重放，实现 <see cref="INsmDataSource"/> 接口，
-/// 与真实串口/模拟器共用同一套界面绑定。
+/// NSM 文件回放服务：读取 .nsm 录制文件，按数据包原始时间间隔重放，
+/// 实现 <see cref="INsmDataSource"/> 接口，与真实串口/模拟器共用同一套界面绑定。
+/// <para>支持两种 .nsm 格式，按首字节自动识别：</para>
+/// <list type="bullet">
+///   <item>本机录制格式：JSON Lines（每行一个 <see cref="NSMDataPacket"/>，首字符 '{'）。</item>
+///   <item>设备采集格式：128 字节定长二进制记录（首字节 0x80），
+///         即协议帧前 126 字节（帧头…NOX）+ 2 字节 CRC，详见《NSM 设备通讯协议文档》。
+///         此格式不含频带功率 / EOG / SEF95 字段。</item>
+/// </list>
 /// </summary>
 public sealed class NsmPlaybackService : INsmDataSource, IDisposable
 {
+    // ── 设备二进制记录格式（128 字节）──
+    private const byte FRAME_HEADER = 0x80;
+    private const int RECORD_SIZE = 128;
+    private const int REC_EEG_OFFSET = 22;
+    private const int REC_EEG_SAMPLES = 100;
     private readonly ILogger<NsmPlaybackService> _logger;
     private CancellationTokenSource? _cts;
     private Task? _task;
@@ -57,13 +68,9 @@ public sealed class NsmPlaybackService : INsmDataSource, IDisposable
     {
         try
         {
-            var packets = new List<NSMDataPacket>();
-            foreach (var line in File.ReadLines(_filePath))
-            {
-                if (string.IsNullOrWhiteSpace(line)) continue;
-                var p = JsonSerializer.Deserialize<NSMDataPacket>(line);
-                if (p != null) packets.Add(p);
-            }
+            var packets = IsBinaryRecordFile(_filePath)
+                ? ReadBinaryRecords(_filePath)
+                : ReadJsonLines(_filePath);
 
             if (packets.Count == 0)
             {
@@ -104,6 +111,91 @@ public sealed class NsmPlaybackService : INsmDataSource, IDisposable
             ErrorOccurred?.Invoke(ex);
             Finish();
         }
+    }
+
+    // ─────────────────────────── 格式识别与读取 ───────────────────────────
+
+    /// <summary>按首个有效字节判别：0x80 为设备二进制记录，否则按 JSON Lines 处理。</summary>
+    private static bool IsBinaryRecordFile(string path)
+    {
+        try
+        {
+            using var fs = File.OpenRead(path);
+            int first = fs.ReadByte();
+            return first == FRAME_HEADER;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    /// <summary>读取本机录制的 JSON Lines 格式。</summary>
+    private static List<NSMDataPacket> ReadJsonLines(string path)
+    {
+        var packets = new List<NSMDataPacket>();
+        foreach (var line in File.ReadLines(path))
+        {
+            if (string.IsNullOrWhiteSpace(line)) continue;
+            var p = JsonSerializer.Deserialize<NSMDataPacket>(line);
+            if (p != null) packets.Add(p);
+        }
+        return packets;
+    }
+
+    /// <summary>读取设备采集的 128 字节定长二进制记录。</summary>
+    private List<NSMDataPacket> ReadBinaryRecords(string path)
+    {
+        var bytes = File.ReadAllBytes(path);
+        int recordCount = bytes.Length / RECORD_SIZE;
+        var packets = new List<NSMDataPacket>(recordCount);
+        for (int i = 0; i < recordCount; i++)
+        {
+            int off = i * RECORD_SIZE;
+            if (bytes[off] != FRAME_HEADER) continue;   // 跳过未对齐/损坏记录
+            try { packets.Add(ParseRecord(bytes, off)); }
+            catch (Exception ex) { _logger.LogWarning(ex, "解析 NSM 记录 #{Index} 出错", i); }
+        }
+        return packets;
+    }
+
+    /// <summary>解析单条 128 字节记录，偏移定义与协议帧前段一致（帧头…NOX）。</summary>
+    private static NSMDataPacket ParseRecord(byte[] buf, int off)
+    {
+        // 设备时间为大端 Unix 秒（Sec4@6 为高位字节）
+        uint deviceTime = ((uint)buf[off + 6] << 24) | ((uint)buf[off + 7] << 16)
+                        | ((uint)buf[off + 8] << 8) | buf[off + 9];
+        byte blockStatus = buf[off + 10];
+
+        var eeg = new double[REC_EEG_SAMPLES];
+        for (int i = 0; i < REC_EEG_SAMPLES; i++)
+            eeg[i] = (sbyte)buf[off + REC_EEG_OFFSET + i];
+
+        var localTime = deviceTime > 0
+            ? DateTimeOffset.FromUnixTimeSeconds(deviceTime).ToLocalTime().DateTime
+            : DateTime.Now;
+
+        return new NSMDataPacket
+        {
+            LocalTimestamp = localTime,
+            DeviceTimeSec = deviceTime,
+            ElectrodeAlarm   = (blockStatus & (1 << 1)) != 0,
+            ImpedanceHigh    = (blockStatus & (1 << 3)) != 0,
+            ElectrodeInvalid = (blockStatus & (1 << 7)) != 0,
+            BlackImpedance = buf[off + 16],
+            WhiteImpedance = buf[off + 17],
+            CSI = buf[off + 13],
+            BS  = buf[off + 14],
+            SQI = buf[off + 15],
+            EMG = buf[off + 18],
+            NOX = buf[off + 125],
+            EventNumber = buf[off + 11],
+            EventType = (NSMEventType)buf[off + 12],
+            AlarmHigh = buf[off + 20],
+            AlarmLow  = buf[off + 21],
+            EEGSamplesUv = eeg,
+            // 128 字节记录格式不含频带功率 / EOG / SEF95
+        };
     }
 
     private void Finish()

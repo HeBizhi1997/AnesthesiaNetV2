@@ -83,6 +83,7 @@ class EEGPreprocessor:
         self._fs = sample_rate
         self._psd_buffer: list[float] = []   # rolling buffer for stable PSD
         self._psd_buffer_max = int(sample_rate * self.PSD_BUFFER_SEC)
+        self._sqi_ema = -1.0                 # EMA-smoothed SQI (-1 = uninitialised)
         # Stateful CAUSAL streaming filters for the display waveforms. The client streams
         # 1-second chunks; filtering each chunk independently (zero-phase filtfilt) produces
         # edge transients + visible discontinuities at every boundary. A causal filter that
@@ -129,6 +130,7 @@ class EEGPreprocessor:
             self._fs = value
             self._psd_buffer_max = int(value * self.PSD_BUFFER_SEC)
             self._psd_buffer.clear()  # buffer was accumulated at old rate
+            self._sqi_ema = -1.0
             self._build_stream_filters()
 
     # ── Public entry point ────────────────────────────────────────────────────
@@ -407,6 +409,17 @@ class EEGPreprocessor:
 
     def _sqi(self, raw: np.ndarray, filtered: np.ndarray,
              hw_diag: dict | None = None) -> float:
+        """EMA-smoothed SQI. A single 1 s epoch's spectral estimate is noisy and an occasional
+        motion/electrical transient would otherwise crater the instantaneous score for one second
+        — making the displayed SQI swing wildly even with good electrode contact. We smooth the
+        per-epoch value with an exponential moving average so the index tracks sustained quality."""
+        inst = self._sqi_instant(raw, filtered, hw_diag)
+        alpha = 0.3   # ~3–4 epoch (s) time constant
+        self._sqi_ema = inst if self._sqi_ema < 0 else alpha * inst + (1.0 - alpha) * self._sqi_ema
+        return round(float(self._sqi_ema), 1)
+
+    def _sqi_instant(self, raw: np.ndarray, filtered: np.ndarray,
+                     hw_diag: dict | None = None) -> float:
         """
         Four-component SQI [0, 100]:
           1. Flatline guard    — std < 0.1 µV → electrode off
@@ -435,32 +448,46 @@ class EEGPreprocessor:
         else:
             max_amp = float(np.max(np.abs(filtered)))
             if max_amp > 1000.0:
-                return 5.0  # saturated electrode (ADS1299 / simulation)
-            # Weak signal penalty (std < 1 µV → electrode barely touching)
-            amp_score = float(np.clip(std / 1.0, 0.0, 1.0)) if std < 1.0 else 1.0
+                # Graded saturation penalty (was a hard 5.0 cliff → a single transient sample
+                # in the 1 s window cratered SQI, causing big epoch-to-epoch jumps). Severe
+                # railing (≫1000 µV) still scores ~5; a mild overshoot scores moderately. The
+                # EMA wrapper then absorbs brief transients instead of letting them dominate.
+                amp_score = float(np.clip(1000.0 / max_amp, 0.05, 0.5))
+            else:
+                # Weak signal penalty (std < 1 µV → electrode barely touching)
+                amp_score = float(np.clip(std / 1.0, 0.0, 1.0)) if std < 1.0 else 1.0
 
-        nperseg = min(self.fs, len(raw))
-        f, pxx = welch(raw, fs=self.fs, nperseg=nperseg)
+        # ── 软件兜底 (software fallback) ─────────────────────────────────────────
+        # Grade noise on the BAND-LIMITED EEG that is actually used downstream (0.5–47 Hz),
+        # NOT the raw full-bandwidth signal. Out-of-band interference (>47 Hz mains harmonics /
+        # switching-supply / broadband EMG) is removed by the broadband filter before any
+        # analysis, so it must not crush the SQI of otherwise-clean clinical EEG. Running the
+        # spectral checks on `filtered` keeps SQI a measure of *usable* EEG quality. In-band
+        # high-γ/EMG (30–47 Hz) is still penalised, so genuine muscle/EMI contamination of the
+        # clinical band is caught. (The raw saturation/amplitude guards above are unchanged.)
+        sig = filtered
+        nperseg = min(self.fs, len(sig))
+        f, pxx = welch(sig, fs=self.fs, nperseg=nperseg)
 
-        # Exclude power-line noise (50 Hz mains + 100 Hz harmonic, ±2 Hz) from the quality
-        # reference. The pipeline notches the mains out, so it must NOT count as 'HF noise'
-        # or skew the tonal/total reference. Without this, the raw signal — typically ~95%+
-        # 50 Hz on this hardware — pins the HF score at its 0.25 floor and caps SQI near 25%
-        # no matter how clean the actual EEG is. Genuine EMG (52–98, 102–125 Hz) still counts.
+        # Mains exclusion (residual 50/100 Hz that survives the causal notch) from the reference.
         mains_mask = np.zeros_like(f, dtype=bool)
         for mf in (50.0, 100.0):
             mains_mask |= (f >= mf - 2.0) & (f <= mf + 2.0)
-        total_power = float(pxx[~mains_mask].sum()) + 1e-12
+        # Reference total = clinical band only (0.5–47 Hz), mains excluded.
+        clin_band = (f >= 0.5) & (f <= 47.0) & ~mains_mask
+        total_power = float(pxx[clin_band].sum()) + 1e-12
 
-        # HF noise: power > 47 Hz (EMG/ESU), excluding the line harmonics above.
-        nyq = self.fs / 2.0
-        if nyq > 50:
-            hf_ratio = float(pxx[(f > 47.0) & ~mains_mask].sum() / total_power)
-            hf_score = float(np.clip(1.0 - hf_ratio * 1.5, 0.25, 1.0))
+        # In-band HF artefact: 30–47 Hz (high-γ / EMG edge) as a fraction of the clinical band.
+        # Clean EEG carries little power here → hf_score≈1; muscle/EMI leakage into the usable
+        # band still drives it down (floored at 0.25). Out-of-band noise no longer contributes.
+        emg_mask = (f >= 30.0) & (f <= 47.0) & ~mains_mask
+        if emg_mask.any():
+            emg_ratio = float(pxx[emg_mask].sum() / total_power)
+            hf_score = float(np.clip(1.0 - emg_ratio * 1.5, 0.25, 1.0))
         else:
             hf_score = 1.0
 
-        # Tonal interference: check if any ±2 Hz window holds >40% of total power.
+        # Tonal interference: check if any ±2 Hz window holds >40% of clinical-band power.
         # Real EEG is broadband (1/f); a dominant narrow-band peak = EMI / bad contact.
         # Only check in the clinical range 4–45 Hz to avoid delta burst false positives.
         tonal_score = 1.0

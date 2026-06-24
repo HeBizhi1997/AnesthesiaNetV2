@@ -92,6 +92,13 @@ public partial class MainViewModel : ObservableObject
     [ObservableProperty] private string _betaPct = "--";
     [ObservableProperty] private string _gammaPct = "--";
 
+    // ── Band absolute power (µV², integrated from the PSD) ──
+    [ObservableProperty] private string _deltaPow = "--";
+    [ObservableProperty] private string _thetaPow = "--";
+    [ObservableProperty] private string _alphaPow = "--";
+    [ObservableProperty] private string _betaPow = "--";
+    [ObservableProperty] private string _gammaPow = "--";
+
     // ── Recording info ──
     [ObservableProperty] private string _recordFileName = "--";
     [ObservableProperty] private string _storagePath = "本地设备";
@@ -123,6 +130,14 @@ public partial class MainViewModel : ObservableObject
     public ISeries[] DonutSeries { get; }
     public ISeries[] QConGauge { get; }
     public ISeries[] QNoxGauge { get; }
+
+    // 频谱图 (功率谱密度 PSD: power vs frequency, 0–70 Hz)
+    public ISeries[] SpectrumSeries { get; }
+    public Axis[] SpectrumXAxes { get; }
+    public Axis[] SpectrumYAxes { get; }
+    public ObservableCollection<RectangularSection> SpectrumSections { get; } = new();
+    private LineSeries<ObservablePoint> _spectrum = null!;
+    private double _eegFs = 250;   // EEG sample rate (Hz); refreshed on acquisition start
 
     private const int Lanes = 6;                  // raw, δ, θ, α, β, γ
     private const int EegWindow = 2500;           // 10 s @ 250 Hz
@@ -200,6 +215,41 @@ public partial class MainViewModel : ObservableObject
             DonutSlice(_dBeta, "#F59E0B"), DonutSlice(_dGamma, "#EF4444"),
         };
 
+        // 频谱图 (PSD)
+        _spectrum = new LineSeries<ObservablePoint>
+        {
+            Values = Array.Empty<ObservablePoint>(),
+            Stroke = new SolidColorPaint(SKColor.Parse("#22D3EE"), 1.8f),
+            Fill = null,   // dB values straddle 0; an area fill pivots at 0 and reads oddly
+            GeometrySize = 0, LineSmoothness = 0.4, AnimationsSpeed = TimeSpan.Zero,
+        };
+        SpectrumSeries = new ISeries[] { _spectrum };
+        SpectrumXAxes = new[]
+        {
+            new Axis
+            {
+                Name = "频率 (Hz)", NamePaint = Paint("#7D8B9A"), NameTextSize = 11,
+                MinLimit = 0, MaxLimit = 70, MinStep = 10, Labeler = v => $"{v:0}",
+                LabelsPaint = Paint("#7D8B9A"), TextSize = 10,
+                SeparatorsPaint = new SolidColorPaint(SKColor.Parse("#16202C"), 1),
+            }
+        };
+        SpectrumYAxes = new[]
+        {
+            new Axis
+            {
+                Name = "dB/Hz", NamePaint = Paint("#7D8B9A"), NameTextSize = 11,
+                Labeler = v => $"{v:0}", LabelsPaint = Paint("#7D8B9A"), TextSize = 10,
+                SeparatorsPaint = new SolidColorPaint(SKColor.Parse("#16202C"), 1),
+            },
+        };
+        // Subtle band shading so spectral peaks map onto δ/θ/α/β/γ (colours match the donut).
+        AddBandSection(0.5, 4, "#1A8B5CF6");
+        AddBandSection(4,   8, "#1A3B82F6");
+        AddBandSection(8,  13, "#1A22C55E");
+        AddBandSection(13, 30, "#1AF59E0B");
+        AddBandSection(30, 70, "#1AEF4444");
+
         // Gauges
         QConGauge = BuildGauge(_qConVal, "#F59E0B");
         QNoxGauge = BuildGauge(_qNoxVal, "#22C55E");
@@ -258,6 +308,7 @@ public partial class MainViewModel : ObservableObject
         if (!_serial.Connect(_cfg.Serial.EegPort, _cfg.Serial.EegBaud, _cfg.Serial.EegSampleRate))
         { MonitorStatusText = $"无法打开 {_cfg.Serial.EegPort}"; return; }
         _pipeline.DeviceSampleRate = _serial.SampleRate;
+        _eegFs = _serial.SampleRate > 0 ? _serial.SampleRate : 250;
         _ = _processing.ResetSessionAsync();
         _recording.Start(_serial.SampleRate);
         if (_recording.SessionDirectory is { } dir)
@@ -375,6 +426,7 @@ public partial class MainViewModel : ObservableObject
         // 脉率 PR / SpO₂ / PRV / 灌注指数 come from the PPG 指夹模组 (see OnPpg); not the EEG result.
 
         UpdateEeg(r);
+        if (valid) UpdateSpectrum(); else ClearSpectrum();
         if (valid && !double.IsNaN(r.BIS)) { AddTrend(_trQcon, r.BIS); AddTrend(_trQnox, DeriveQnox(r.BIS)); }
     }
 
@@ -469,6 +521,98 @@ public partial class MainViewModel : ObservableObject
             var pts = new ObservablePoint[buf.Count];
             for (int k = 0; k < buf.Count; k++) pts[k] = new ObservablePoint(k, offset + (buf[k] - mean) / max * 0.44);
             _lane[i].Values = pts;
+        }
+    }
+
+    // 频谱图: estimate the power spectral density of the rolling filtered-EEG window
+    // (Hann-windowed radix-2 FFT) and integrate it per band to get absolute power (µV²).
+    private void UpdateSpectrum()
+    {
+        var src = _laneBuf[0];                 // filtered EEG (µV)
+        int n = 1; while (n * 2 <= src.Count && n < 4096) n <<= 1;
+        if (n < 256) { ClearSpectrum(); return; }
+
+        var re = new double[n];
+        var im = new double[n];
+        int start = src.Count - n;
+        double mean = 0; for (int i = 0; i < n; i++) mean += src[start + i]; mean /= n;
+        double winPow = 0;                      // Σ w² — for amplitude-correct PSD scaling
+        for (int i = 0; i < n; i++)
+        {
+            double w = 0.5 - 0.5 * Math.Cos(2 * Math.PI * i / (n - 1));   // Hann window
+            re[i] = (src[start + i] - mean) * w;
+            winPow += w * w;
+        }
+        Fft(re, im);
+
+        double fs = _eegFs > 0 ? _eegFs : 250;
+        double df = fs / n;
+        double scale = 2.0 / (fs * winPow);     // one-sided PSD, µV²/Hz
+        int half = n / 2;
+        var pts = new List<ObservablePoint>(half);
+        double pd = 0, pt = 0, pa = 0, pb = 0, pg = 0;
+        for (int k = 1; k <= half; k++)
+        {
+            double f = k * df;
+            if (f > 45) break;   // filtered EEG passband is 0.5–47 Hz; clinical γ tops out ~45 Hz
+            double psd = (re[k] * re[k] + im[k] * im[k]) * scale;   // µV²/Hz (linear)
+            double db = psd > 0 ? Math.Max(10 * Math.Log10(psd), -40) : -40;   // dB/Hz, floored
+            pts.Add(new ObservablePoint(f, db));
+            if (f < 0.5) continue;               // sub-δ DC/drift residue — not a clinical band
+            double bandP = psd * df;             // µV² contributed by this bin (linear)
+            if (f < 4) pd += bandP;
+            else if (f < 8) pt += bandP;
+            else if (f < 13) pa += bandP;
+            else if (f < 30) pb += bandP;
+            else pg += bandP;                    // 30–45 Hz
+        }
+        _spectrum.Values = pts.ToArray();
+        DeltaPow = FormatPower(pd); ThetaPow = FormatPower(pt); AlphaPow = FormatPower(pa);
+        BetaPow = FormatPower(pb); GammaPow = FormatPower(pg);
+    }
+
+    private void ClearSpectrum()
+    {
+        _spectrum.Values = Array.Empty<ObservablePoint>();
+        DeltaPow = ThetaPow = AlphaPow = BetaPow = GammaPow = "--";
+    }
+
+    private void AddBandSection(double x0, double x1, string fill) =>
+        SpectrumSections.Add(new RectangularSection { Xi = x0, Xj = x1, Fill = new SolidColorPaint(SKColor.Parse(fill)) });
+
+    // Absolute band power → decibels. Power convention 10·log₁₀(P) (ref 1 µV²), the standard
+    // for EEG spectral power; values typically span a wide range so dB compresses them sensibly.
+    private static string FormatPower(double p) =>
+        p > 0 ? $"{10 * Math.Log10(p):0.0}" : "--";
+
+    // In-place iterative radix-2 Cooley–Tukey FFT (n must be a power of two).
+    private static void Fft(double[] re, double[] im)
+    {
+        int n = re.Length;
+        for (int i = 1, j = 0; i < n; i++)         // bit-reversal permutation
+        {
+            int bit = n >> 1;
+            for (; (j & bit) != 0; bit >>= 1) j ^= bit;
+            j ^= bit;
+            if (i < j) { (re[i], re[j]) = (re[j], re[i]); (im[i], im[j]) = (im[j], im[i]); }
+        }
+        for (int len = 2; len <= n; len <<= 1)
+        {
+            double ang = -2 * Math.PI / len;
+            double wr = Math.Cos(ang), wi = Math.Sin(ang);
+            for (int i = 0; i < n; i += len)
+            {
+                double cr = 1, ci = 0;
+                for (int k = 0; k < len / 2; k++)
+                {
+                    int a = i + k, b = a + len / 2;
+                    double tr = re[b] * cr - im[b] * ci;
+                    double ti = re[b] * ci + im[b] * cr;
+                    re[b] = re[a] - tr; im[b] = im[a] - ti;
+                    re[a] += tr; im[a] += ti;
+                    double ncr = cr * wr - ci * wi; ci = cr * wi + ci * wr; cr = ncr;
+                }
+            }
         }
     }
 

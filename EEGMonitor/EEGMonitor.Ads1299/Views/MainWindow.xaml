@@ -342,20 +342,78 @@
                     </DockPanel>
                 </Border>
 
-                <!-- 5. Donut -->
+                <!-- 5. 脑电成分功率占比 (左) + 频谱图 (右) -->
                 <Border Grid.Row="2" Grid.Column="1" Style="{StaticResource Card}">
                     <DockPanel>
-                        <TextBlock DockPanel.Dock="Top" Text="5.  脑电成分功率占比" Style="{StaticResource PanelTitle}"/>
+                        <TextBlock DockPanel.Dock="Top" Text="5.  脑电成分功率占比 &amp; 频谱" Style="{StaticResource PanelTitle}"/>
                         <Grid>
-                            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="178"/></Grid.ColumnDefinitions>
-                            <lvc:PieChart Grid.Column="0" Series="{Binding DonutSeries}" TooltipPosition="Hidden"/>
-                            <StackPanel Grid.Column="1" VerticalAlignment="Center">
-                                <DockPanel Margin="0,6"><Ellipse Width="12" Height="12" Fill="{StaticResource DeltaBrush}" VerticalAlignment="Center"/><TextBlock Text="{Binding DeltaPct}" Foreground="{StaticResource TextBrush}" FontSize="16" FontWeight="Bold" DockPanel.Dock="Right" VerticalAlignment="Center"/><TextBlock Text="  δ (0.5–4 Hz)" Foreground="{StaticResource MutedBrush}" FontSize="14" VerticalAlignment="Center"/></DockPanel>
-                                <DockPanel Margin="0,6"><Ellipse Width="12" Height="12" Fill="{StaticResource ThetaBrush}" VerticalAlignment="Center"/><TextBlock Text="{Binding ThetaPct}" Foreground="{StaticResource TextBrush}" FontSize="16" FontWeight="Bold" DockPanel.Dock="Right" VerticalAlignment="Center"/><TextBlock Text="  θ (4–8 Hz)" Foreground="{StaticResource MutedBrush}" FontSize="14" VerticalAlignment="Center"/></DockPanel>
-                                <DockPanel Margin="0,6"><Ellipse Width="12" Height="12" Fill="{StaticResource AlphaBrush}" VerticalAlignment="Center"/><TextBlock Text="{Binding AlphaPct}" Foreground="{StaticResource TextBrush}" FontSize="16" FontWeight="Bold" DockPanel.Dock="Right" VerticalAlignment="Center"/><TextBlock Text="  α (8–13 Hz)" Foreground="{StaticResource MutedBrush}" FontSize="14" VerticalAlignment="Center"/></DockPanel>
-                                <DockPanel Margin="0,6"><Ellipse Width="12" Height="12" Fill="{StaticResource BetaBrush}" VerticalAlignment="Center"/><TextBlock Text="{Binding BetaPct}" Foreground="{StaticResource TextBrush}" FontSize="16" FontWeight="Bold" DockPanel.Dock="Right" VerticalAlignment="Center"/><TextBlock Text="  β (13–30 Hz)" Foreground="{StaticResource MutedBrush}" FontSize="14" VerticalAlignment="Center"/></DockPanel>
-                                <DockPanel Margin="0,6"><Ellipse Width="12" Height="12" Fill="{StaticResource GammaBrush}" VerticalAlignment="Center"/><TextBlock Text="{Binding GammaPct}" Foreground="{StaticResource TextBrush}" FontSize="16" FontWeight="Bold" DockPanel.Dock="Right" VerticalAlignment="Center"/><TextBlock Text="  γ (30–70 Hz)" Foreground="{StaticResource MutedBrush}" FontSize="14" VerticalAlignment="Center"/></DockPanel>
-                            </StackPanel>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="1.05*"/>
+                                <ColumnDefinition Width="1*"/>
+                            </Grid.ColumnDefinitions>
+
+                            <!-- ── 左:成分占比 (环形图) + 各成分实际功率 ── -->
+                            <Grid Grid.Column="0">
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="*"/>
+                                    <RowDefinition Height="Auto"/>
+                                </Grid.RowDefinitions>
+                                <lvc:PieChart Grid.Row="0" Series="{Binding DonutSeries}" TooltipPosition="Hidden"/>
+                                <!-- legend: 成分 | 占比 | 实际功率(µV²) -->
+                                <StackPanel Grid.Row="1" Margin="2,4,2,0">
+                                    <Grid Margin="0,0,0,2">
+                                        <Grid.ColumnDefinitions><ColumnDefinition Width="16"/><ColumnDefinition Width="*"/><ColumnDefinition Width="44"/><ColumnDefinition Width="58"/></Grid.ColumnDefinitions>
+                                        <TextBlock Grid.Column="1" Text="成分" Foreground="{StaticResource MutedBrush}" FontSize="10"/>
+                                        <TextBlock Grid.Column="2" Text="占比" Foreground="{StaticResource MutedBrush}" FontSize="10" HorizontalAlignment="Right"/>
+                                        <TextBlock Grid.Column="3" Text="功率/dB" Foreground="{StaticResource MutedBrush}" FontSize="10" HorizontalAlignment="Right"/>
+                                    </Grid>
+                                    <Grid Margin="0,2">
+                                        <Grid.ColumnDefinitions><ColumnDefinition Width="16"/><ColumnDefinition Width="*"/><ColumnDefinition Width="44"/><ColumnDefinition Width="58"/></Grid.ColumnDefinitions>
+                                        <Ellipse Grid.Column="0" Width="11" Height="11" Fill="{StaticResource DeltaBrush}" VerticalAlignment="Center"/>
+                                        <TextBlock Grid.Column="1" Text="δ (0.5–4)" Foreground="{StaticResource MutedBrush}" FontSize="12" VerticalAlignment="Center"/>
+                                        <TextBlock Grid.Column="2" Text="{Binding DeltaPct}" Foreground="{StaticResource TextBrush}" FontSize="13" FontWeight="Bold" HorizontalAlignment="Right" VerticalAlignment="Center"/>
+                                        <TextBlock Grid.Column="3" Text="{Binding DeltaPow}" Foreground="{StaticResource MutedBrush}" FontSize="12" HorizontalAlignment="Right" VerticalAlignment="Center"/>
+                                    </Grid>
+                                    <Grid Margin="0,2">
+                                        <Grid.ColumnDefinitions><ColumnDefinition Width="16"/><ColumnDefinition Width="*"/><ColumnDefinition Width="44"/><ColumnDefinition Width="58"/></Grid.ColumnDefinitions>
+                                        <Ellipse Grid.Column="0" Width="11" Height="11" Fill="{StaticResource ThetaBrush}" VerticalAlignment="Center"/>
+                                        <TextBlock Grid.Column="1" Text="θ (4–8)" Foreground="{StaticResource MutedBrush}" FontSize="12" VerticalAlignment="Center"/>
+                                        <TextBlock Grid.Column="2" Text="{Binding ThetaPct}" Foreground="{StaticResource TextBrush}" FontSize="13" FontWeight="Bold" HorizontalAlignment="Right" VerticalAlignment="Center"/>
+                                        <TextBlock Grid.Column="3" Text="{Binding ThetaPow}" Foreground="{StaticResource MutedBrush}" FontSize="12" HorizontalAlignment="Right" VerticalAlignment="Center"/>
+                                    </Grid>
+                                    <Grid Margin="0,2">
+                                        <Grid.ColumnDefinitions><ColumnDefinition Width="16"/><ColumnDefinition Width="*"/><ColumnDefinition Width="44"/><ColumnDefinition Width="58"/></Grid.ColumnDefinitions>
+                                        <Ellipse Grid.Column="0" Width="11" Height="11" Fill="{StaticResource AlphaBrush}" VerticalAlignment="Center"/>
+                                        <TextBlock Grid.Column="1" Text="α (8–13)" Foreground="{StaticResource MutedBrush}" FontSize="12" VerticalAlignment="Center"/>
+                                        <TextBlock Grid.Column="2" Text="{Binding AlphaPct}" Foreground="{StaticResource TextBrush}" FontSize="13" FontWeight="Bold" HorizontalAlignment="Right" VerticalAlignment="Center"/>
+                                        <TextBlock Grid.Column="3" Text="{Binding AlphaPow}" Foreground="{StaticResource MutedBrush}" FontSize="12" HorizontalAlignment="Right" VerticalAlignment="Center"/>
+                                    </Grid>
+                                    <Grid Margin="0,2">
+                                        <Grid.ColumnDefinitions><ColumnDefinition Width="16"/><ColumnDefinition Width="*"/><ColumnDefinition Width="44"/><ColumnDefinition Width="58"/></Grid.ColumnDefinitions>
+                                        <Ellipse Grid.Column="0" Width="11" Height="11" Fill="{StaticResource BetaBrush}" VerticalAlignment="Center"/>
+                                        <TextBlock Grid.Column="1" Text="β (13–30)" Foreground="{StaticResource MutedBrush}" FontSize="12" VerticalAlignment="Center"/>
+                                        <TextBlock Grid.Column="2" Text="{Binding BetaPct}" Foreground="{StaticResource TextBrush}" FontSize="13" FontWeight="Bold" HorizontalAlignment="Right" VerticalAlignment="Center"/>
+                                        <TextBlock Grid.Column="3" Text="{Binding BetaPow}" Foreground="{StaticResource MutedBrush}" FontSize="12" HorizontalAlignment="Right" VerticalAlignment="Center"/>
+                                    </Grid>
+                                    <Grid Margin="0,2">
+                                        <Grid.ColumnDefinitions><ColumnDefinition Width="16"/><ColumnDefinition Width="*"/><ColumnDefinition Width="44"/><ColumnDefinition Width="58"/></Grid.ColumnDefinitions>
+                                        <Ellipse Grid.Column="0" Width="11" Height="11" Fill="{StaticResource GammaBrush}" VerticalAlignment="Center"/>
+                                        <TextBlock Grid.Column="1" Text="γ (30–70)" Foreground="{StaticResource MutedBrush}" FontSize="12" VerticalAlignment="Center"/>
+                                        <TextBlock Grid.Column="2" Text="{Binding GammaPct}" Foreground="{StaticResource TextBrush}" FontSize="13" FontWeight="Bold" HorizontalAlignment="Right" VerticalAlignment="Center"/>
+                                        <TextBlock Grid.Column="3" Text="{Binding GammaPow}" Foreground="{StaticResource MutedBrush}" FontSize="12" HorizontalAlignment="Right" VerticalAlignment="Center"/>
+                                    </Grid>
+                                </StackPanel>
+                            </Grid>
+
+                            <!-- ── 右:频谱图 (功率谱密度) ── -->
+                            <Border Grid.Column="1" BorderBrush="{StaticResource PanelBorder}" BorderThickness="1,0,0,0" Margin="6,0,0,0" Padding="6,0,0,0">
+                                <DockPanel>
+                                    <TextBlock DockPanel.Dock="Top" Text="功率谱密度 (PSD · dB/Hz · 0–70 Hz)" Foreground="{StaticResource MutedBrush}" FontSize="11" Margin="2,0,0,2"/>
+                                    <lvc:CartesianChart Series="{Binding SpectrumSeries}" XAxes="{Binding SpectrumXAxes}"
+                                                        YAxes="{Binding SpectrumYAxes}" Sections="{Binding SpectrumSections}"
+                                                        TooltipPosition="Hidden"/>
+                                </DockPanel>
+                            </Border>
                         </Grid>
                     </DockPanel>
                 </Border>

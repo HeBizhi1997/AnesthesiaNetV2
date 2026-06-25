@@ -85,19 +85,29 @@ public partial class MainViewModel : ObservableObject
     [ObservableProperty] private string _spiStatus = "--";
     private readonly List<double> _hbiRoll = new(), _ppgaRoll = new();   // for SPI histogram normalisation
 
-    // ── Band % ──
+    // ── Band % (脑波成分占比,只按 δ/θ/α/β 归一化;γ 频段已单列为 EMG) ──
     [ObservableProperty] private string _deltaPct = "--";
     [ObservableProperty] private string _thetaPct = "--";
     [ObservableProperty] private string _alphaPct = "--";
     [ObservableProperty] private string _betaPct = "--";
-    [ObservableProperty] private string _gammaPct = "--";
 
-    // ── Band absolute power (µV², integrated from the PSD) ──
+    // EMG 肌电污染指标:30–47Hz 占全谱比例(前额 γ 段几乎全是额肌肌电,临床上单列)
+    [ObservableProperty] private string _emgPct = "--";
+
+    // ── Band absolute power (dB, integrated from the PSD) ──
     [ObservableProperty] private string _deltaPow = "--";
     [ObservableProperty] private string _thetaPow = "--";
     [ObservableProperty] private string _alphaPow = "--";
     [ObservableProperty] private string _betaPow = "--";
-    [ObservableProperty] private string _gammaPow = "--";
+    [ObservableProperty] private string _emgPow = "--";
+
+    // EOG 眼电/慢漂移指标:0.5–2Hz 占全谱比例(前额低频几乎全是眼动/眨眼/基线漂移,单列为污染指标)。
+    // 它与 δ(0.5–4)重叠,正是解释"清醒睁眼时 δ 异常高、EMG 被挤到 1%"的关键。
+    [ObservableProperty] private string _eogPct = "--";
+    [ObservableProperty] private string _eogPow = "--";
+
+    // 宽带肌电 RMS(µV):波形通道会自动按各道最大值归一化(看不出绝对幅度),故单给一个绝对数。
+    [ObservableProperty] private string _emgAmplitudeText = "--";
 
     // ── Recording info ──
     [ObservableProperty] private string _recordFileName = "--";
@@ -139,7 +149,7 @@ public partial class MainViewModel : ObservableObject
     private LineSeries<ObservablePoint> _spectrum = null!;
     private double _eegFs = 250;   // EEG sample rate (Hz); refreshed on acquisition start
 
-    private const int Lanes = 6;                  // raw, δ, θ, α, β, γ
+    private const int Lanes = 6;                  // raw, δ, θ, α, β, EMG(宽带肌电,替代原 γ 显示道)
     private const int EegWindow = 2500;           // 10 s @ 250 Hz
     private readonly List<double>[] _laneBuf = { new(), new(), new(), new(), new(), new() };
     private readonly LineSeries<ObservablePoint>[] _lane = new LineSeries<ObservablePoint>[Lanes];
@@ -152,7 +162,7 @@ public partial class MainViewModel : ObservableObject
     private int _pulseDecim;
     [ObservableProperty] private IReadOnlyList<double>? _pulseWave;
 
-    private readonly ObservableValue _dDelta = new(0), _dTheta = new(0), _dAlpha = new(0), _dBeta = new(0), _dGamma = new(0);
+    private readonly ObservableValue _dDelta = new(0), _dTheta = new(0), _dAlpha = new(0), _dBeta = new(0);
     private readonly ObservableValue _qConVal = new(0), _qNoxVal = new(0);
     // Trend X = elapsed seconds since acquisition start (wall-clock). Keying off this — instead of
     // an EEG-epoch counter — lets PR/SpO₂ keep trending even when the EEG board sends nothing
@@ -160,7 +170,8 @@ public partial class MainViewModel : ObservableObject
     private double TrendX => _startedAt == default ? 0 : (DateTime.Now - _startedAt).TotalSeconds;
 
     private static SolidColorPaint Paint(string hex) => new(SKColor.Parse(hex));
-    private static readonly string[] LaneHex = { "#E2E8F0", "#3B82F6", "#06B6D4", "#22C55E", "#F59E0B", "#A855F7" };
+    // lane 5 由 γ(30–45,受 47Hz 低通限制) 改为宽带 EMG(≥30Hz,off raw) → 红色,与模块5 EMG 一致。
+    private static readonly string[] LaneHex = { "#E2E8F0", "#3B82F6", "#06B6D4", "#22C55E", "#F59E0B", "#EF4444" };
 
     public MainViewModel(AppConfig cfg, SerialPortService serial, PulseSerialService pulse,
         PpgSerialService ppg, DataPipeline pipeline, RecordingService recording, EEGProcessingClient processing,
@@ -208,11 +219,11 @@ public partial class MainViewModel : ObservableObject
                        SeparatorsPaint = new SolidColorPaint(SKColor.Parse("#16202C"), 1) },
         };
 
-        // Donut
+        // Donut —— 只显示 4 个脑波频段(δ/θ/α/β);γ 段已剥离为 EMG 单列指标
         DonutSeries = new ISeries[]
         {
-            DonutSlice(_dDelta, "#8B5CF6"), DonutSlice(_dTheta, "#3B82F6"), DonutSlice(_dAlpha, "#22C55E"),
-            DonutSlice(_dBeta, "#F59E0B"), DonutSlice(_dGamma, "#EF4444"),
+            DonutSlice(_dDelta, "#8B5CF6"), DonutSlice(_dTheta, "#3B82F6"),
+            DonutSlice(_dAlpha, "#22C55E"), DonutSlice(_dBeta, "#F59E0B"),
         };
 
         // 频谱图 (PSD)
@@ -229,7 +240,7 @@ public partial class MainViewModel : ObservableObject
             new Axis
             {
                 Name = "频率 (Hz)", NamePaint = Paint("#7D8B9A"), NameTextSize = 11,
-                MinLimit = 0, MaxLimit = 70, MinStep = 10, Labeler = v => $"{v:0}",
+                MinLimit = 0, MaxLimit = 45, MinStep = 10, Labeler = v => $"{v:0}",
                 LabelsPaint = Paint("#7D8B9A"), TextSize = 10,
                 SeparatorsPaint = new SolidColorPaint(SKColor.Parse("#16202C"), 1),
             }
@@ -248,13 +259,22 @@ public partial class MainViewModel : ObservableObject
         AddBandSection(4,   8, "#1A3B82F6");
         AddBandSection(8,  13, "#1A22C55E");
         AddBandSection(13, 30, "#1AF59E0B");
-        AddBandSection(30, 70, "#1AEF4444");
+        AddBandSection(30, 45, "#1AEF4444");
 
         // Gauges
         QConGauge = BuildGauge(_qConVal, "#F59E0B");
         QNoxGauge = BuildGauge(_qNoxVal, "#22C55E");
 
         _serial.ConnectionStatusChanged += s => OnUi(() => MonitorStatusText = s);
+        // Board rate is power-dependent (≈125Hz mains / ≈250Hz battery); follow the measured rate
+        // so the pipeline + Python welch + spectrum fs are always correct.
+        _serial.SampleRateChanged += rate =>
+        {
+            _eegFs = rate;
+            _pipeline.DeviceSampleRate = rate;
+            _recording.UpdateSampleRate(rate);   // 把实测采样率写回录制 meta(回放据此解读)
+            _logger.LogInformation("EEG 采样率自动测得并切换为 {Rate}Hz", rate);
+        };
         _pipeline.ResultAvailable += r => OnUi(() => OnResult(r));
         _pulse.BpmReceived += OnBpm;
         _ppg.ReadingReceived += OnPpg;
@@ -410,17 +430,26 @@ public partial class MainViewModel : ObservableObject
             SqiText = $"{Math.Round(r.SQI)}";
             SqiQuality = QualityStatus(r.SQI);
 
-            double tot = r.DeltaPower + r.ThetaPower + r.AlphaPower + r.BetaPower + r.GammaPower; if (tot <= 0) tot = 1;
-            double d = r.DeltaPower / tot, th = r.ThetaPower / tot, al = r.AlphaPower / tot, b = r.BetaPower / tot, g = r.GammaPower / tot;
-            _dDelta.Value = Math.Round(d * 100, 1); _dTheta.Value = Math.Round(th * 100, 1); _dAlpha.Value = Math.Round(al * 100, 1);
-            _dBeta.Value = Math.Round(b * 100, 1); _dGamma.Value = Math.Round(g * 100, 1);
-            DeltaPct = $"{d * 100:0}%"; ThetaPct = $"{th * 100:0}%"; AlphaPct = $"{al * 100:0}%"; BetaPct = $"{b * 100:0}%"; GammaPct = $"{g * 100:0}%";
+            // 成分占比只对脑波(δ/θ/α/β)归一化;EMG 单列(下方),用宽带肌电,不挤占脑波饼图。
+            double brain = r.DeltaPower + r.ThetaPower + r.AlphaPower + r.BetaPower; if (brain <= 0) brain = 1;
+            double d = r.DeltaPower / brain, th = r.ThetaPower / brain, al = r.AlphaPower / brain, b = r.BetaPower / brain;
+            _dDelta.Value = Math.Round(d * 100, 1); _dTheta.Value = Math.Round(th * 100, 1);
+            _dAlpha.Value = Math.Round(al * 100, 1); _dBeta.Value = Math.Round(b * 100, 1);
+            DeltaPct = $"{d * 100:0}%"; ThetaPct = $"{th * 100:0}%"; AlphaPct = $"{al * 100:0}%"; BetaPct = $"{b * 100:0}%";
+            // 宽带肌电(≥30Hz,off raw)统一口径 —— 与模块1 的 EMG 通道同源(emg_amplitude_uv):
+            //   占比 = 肌电功率/(肌电+脑电)功率;dB = 功率(RMS²)的 10log10;µVrms = 绝对肌肉活动。
+            double emgPow = r.EmgAmplitudeUv * r.EmgAmplitudeUv;
+            double eegPow = r.EegAmplitudeUv * r.EegAmplitudeUv;
+            EmgPct = (emgPow + eegPow) > 0 ? $"{emgPow / (emgPow + eegPow) * 100:0}%" : "--";
+            EmgPow = FormatPower(emgPow);
+            EmgAmplitudeText = r.EmgAmplitudeUv > 0 ? $"{r.EmgAmplitudeUv:0} µVrms" : "--";
         }
         else
         {
             Sqi = 0; SqiText = "--"; SqiQuality = "无效";
-            _dDelta.Value = _dTheta.Value = _dAlpha.Value = _dBeta.Value = _dGamma.Value = 0;
-            DeltaPct = ThetaPct = AlphaPct = BetaPct = GammaPct = "--";
+            _dDelta.Value = _dTheta.Value = _dAlpha.Value = _dBeta.Value = 0;
+            DeltaPct = ThetaPct = AlphaPct = BetaPct = EmgPct = "--";
+            EmgPow = EmgAmplitudeText = "--";
         }
 
         // 脉率 PR / SpO₂ / PRV / 灌注指数 come from the PPG 指夹模组 (see OnPpg); not the EEG result.
@@ -505,7 +534,9 @@ public partial class MainViewModel : ObservableObject
 
     private void UpdateEeg(ProcessedEEGResult r)
     {
-        double[][] lanes = { r.FilteredEEG, r.DeltaWave, r.ThetaWave, r.AlphaWave, r.BetaWave, r.GammaWave };
+        // lane 5 = 宽带 EMG(off raw,≥30Hz);若服务端未提供则回退到旧 γ 波,保证向后兼容。
+        double[] emgLane = r.EmgWave.Length > 0 ? r.EmgWave : r.GammaWave;
+        double[][] lanes = { r.FilteredEEG, r.DeltaWave, r.ThetaWave, r.AlphaWave, r.BetaWave, emgLane };
         for (int i = 0; i < Lanes; i++)
         {
             if (lanes[i].Length > 0)
@@ -550,7 +581,7 @@ public partial class MainViewModel : ObservableObject
         double scale = 2.0 / (fs * winPow);     // one-sided PSD, µV²/Hz
         int half = n / 2;
         var pts = new List<ObservablePoint>(half);
-        double pd = 0, pt = 0, pa = 0, pb = 0, pg = 0;
+        double pd = 0, pt = 0, pa = 0, pb = 0, pg = 0, peog = 0;
         for (int k = 1; k <= half; k++)
         {
             double f = k * df;
@@ -560,6 +591,9 @@ public partial class MainViewModel : ObservableObject
             pts.Add(new ObservablePoint(f, db));
             if (f < 0.5) continue;               // sub-δ DC/drift residue — not a clinical band
             double bandP = psd * df;             // µV² contributed by this bin (linear)
+            // EOG/慢漂移:0.5–2Hz。前额此段几乎全是眼动/眨眼/基线漂移(非皮层 δ),作污染指标。
+            // 它是 δ(0.5–4)的低频子段 → 与 δ 重叠,所以"EOG 大"正解释"δ 大"。
+            if (f < 2.0) peog += bandP;
             if (f < 4) pd += bandP;
             else if (f < 8) pt += bandP;
             else if (f < 13) pa += bandP;
@@ -568,13 +602,18 @@ public partial class MainViewModel : ObservableObject
         }
         _spectrum.Values = pts.ToArray();
         DeltaPow = FormatPower(pd); ThetaPow = FormatPower(pt); AlphaPow = FormatPower(pa);
-        BetaPow = FormatPower(pb); GammaPow = FormatPower(pg);
+        BetaPow = FormatPower(pb);   // EMG(dB) 改由 OnResult 用宽带 emg_amplitude_uv 计算(统一口径)
+        EogPow = FormatPower(peog);
+        // EOG 占全谱(0.5–45Hz)比例,与 EMG 同口径(均为"污染占总功率"),不参与 δθαβ 饼图归一化。
+        double totalP = pd + pt + pa + pb + pg;
+        EogPct = totalP > 0 ? $"{peog / totalP * 100:0}%" : "--";
     }
 
     private void ClearSpectrum()
     {
         _spectrum.Values = Array.Empty<ObservablePoint>();
-        DeltaPow = ThetaPow = AlphaPow = BetaPow = GammaPow = "--";
+        DeltaPow = ThetaPow = AlphaPow = BetaPow = "--";   // EMG(dB) 在 OnResult 处置
+        EogPct = EogPow = "--";
     }
 
     private void AddBandSection(double x0, double x1, string fill) =>

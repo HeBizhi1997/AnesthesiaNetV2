@@ -80,6 +80,36 @@ def _window_filter(data: np.ndarray, fs: float, cfg: dict) -> np.ndarray:
     return out
 
 
+def _deblink(x: np.ndarray, fs: float, k: float = 4.0, lp_hz: float = 5.0,
+             pad_s: float = 0.15, max_frac: float = 0.5) -> np.ndarray:
+    """
+    去除大幅慢眼电瞬变(眨眼/眼动),仅用于幅度标定的去伪迹。
+    在 <5Hz 分量上用稳健阈值(MAD)检出眨眼核,膨胀后线性插值掉。无眨眼或检出过多时原样返回。
+    与 eeg_preprocessor._deblink_for_power 同法,前额单通道无独立 EOG 时的标准做法。
+    """
+    n = len(x)
+    if n < int(fs // 2):
+        return x
+    nyq = fs / 2.0
+    lp = butter(2, min(lp_hz, nyq * 0.9) / nyq, btype="low", output="sos")
+    lf = sosfiltfilt(lp, x)
+    med = np.median(lf)
+    rstd = 1.4826 * (np.median(np.abs(lf - med)) + 1e-9)
+    core = np.abs(lf - med) > k * rstd
+    frac = float(core.mean())
+    if frac == 0.0 or frac > max_frac:
+        return x
+    win = int(pad_s * fs) * 2 + 1
+    mask = np.convolve(core.astype(np.float64), np.ones(win), mode="same") > 0.5
+    good = ~mask
+    if mask.all() or good.sum() < max(8, int(0.3 * n)):
+        return x
+    idx = np.arange(n)
+    y = x.copy()
+    y[mask] = np.interp(idx[mask], idx[good], x[good])
+    return y
+
+
 # ── Main predictor ────────────────────────────────────────────────────────────
 
 class BISPredictor:
@@ -87,10 +117,20 @@ class BISPredictor:
     _WIN_SEC    = 4         # 4-second context window
     _WIN_SAMP   = _TARGET_FS * _WIN_SEC   # 512 samples
     _N_CHANNELS = 2
+    # 幅度归一化:每窗 _deblink(P1-3)去眨眼;标定基线用"抗污染重建"——广带 MAD ≫ α+β 皮层幅度
+    # (>2×=被 EOG/漂移/EMG 污染)或 δ 主导时改用 α+β RMS×2.5,逼近训练干净 MAD(域适配,见标定段)。
 
     # Calibration: accumulate 60 s at 128 Hz before computing the MAD scale
     _CALIB_SEC  = 60
     _CALIB_SAMP = _TARGET_FS * _CALIB_SEC   # 7 680 samples
+
+    # ── 运动伪迹保持 + 输出平滑(消除体动导致的推理值骤降)─────────────────────────
+    # 体动 = 突发大幅瞬变。判据用"相对突跳"(当前窗 RMS ≫ 近期基线中值)——天然区分
+    # 体动(突发)与麻醉加深(渐变,基线会跟随)。命中则冻结 GRU、保持上次输出,不让坏窗污染。
+    _MOTION_JUMP     = 3.0    # 窗 RMS > 此倍数×基线中值 ⇒ 运动伪迹
+    _MOTION_HIST     = 30     # 基线统计窗口(≈30 个 epoch);median 抗离群,偶发体动不污染基线
+    _MOTION_MIN_HIST = 10     # 需累积的最少历史
+    _SMOOTH_N        = 5      # 输出中值平滑长度(≈5s);中值比 EMA 更能压单帧尖刺
 
     def __init__(self, model_path: str | None = None, sample_rate: int = 256):
         self.input_fs   = sample_rate
@@ -101,12 +141,16 @@ class BISPredictor:
         self._feat_ext  = None
         self._sqi_comp  = None
 
-        # ── P3：每病例 awake-anchor 偏置校准 ──────────────────────────────────
-        # 个体 PK/PD 差异(CE50 ±30%)→同等 EEG 形态下 BIS 系统性偏移 15-25 点。
-        # 临床先验：录制通常在诱导前接上电极，患者清醒 → 真值 BIS≈95。
-        # 用开机最初一段（若模型自身也判为清醒）把预测锚定到 target_awake，
-        # 求得一个钳制过的常数偏置加到后续所有预测上（仅平移，不改主干）。
-        self._bias_cal_enabled  = True
+        # ── awake-anchor 偏置校准（P0-2：默认关闭）────────────────────────────
+        # 设计初衷：个体 PK/PD 差异(CE50 ±30%)→同等 EEG 形态下 BIS 系统性偏移；
+        # 用开机清醒段把预测锚定到 ~95，求一个钳制常数偏置加到后续所有预测。
+        #
+        # 为何默认关闭（深度评估 P0-2）：
+        #   1. BIS 量程非线性——"清醒处 +15"在维持/深麻醉处并不等于 +15，常数平移不成立；
+        #   2. 方向不安全——整体抬高维持期读数 → 看起来更浅 → 可能诱导过量；
+        #   3. 无商用监护用"开机 1 分钟学一个全程常数偏移"；个体差异应由模型/药物先验处理。
+        # 仅当 checkpoint 的 cfg.inference.calibrate_awake 显式为 true 时才启用。
+        self._bias_cal_enabled  = False
         self._bias_target_awake = 95.0   # 清醒锚点 BIS
         self._bias_window_n     = 60     # 需累积的有效预测数（≈60s）
         self._bias_clamp        = 15.0   # 偏置上限（防离谱校准）
@@ -115,6 +159,10 @@ class BISPredictor:
         self._bias_locked        = False
         self._cal_preds: list[float] = []
         self.last_bis_uncertainty: float = float("nan")  # P2：最近一次预测的 BIS 不确定度
+        # 实际加载的模型信息（用于诚实上报，避免"代码声称 v17 实跑 v13"）
+        self.model_path: str | None    = None   # 实际加载的 checkpoint 绝对路径
+        self.model_tag: str            = "none" # 从路径推断的版本标签（v17/v14/v13/…）
+        self.model_caps: dict          = {}     # {bis_head, bis_uncertainty, channels, val_mae}
         # Channel count the model expects — derived from the checkpoint config in
         # _try_load_model (eeg.channels). Single-channel board → 1ch model just works.
         self._n_channels = self._N_CHANNELS
@@ -136,17 +184,24 @@ class BISPredictor:
         self._dead_channel: int | None = None    # auto-detected dead channel
         self._mirror_source: int | None = None   # which channel to mirror from
 
+        # 运动伪迹保持 + 输出平滑状态
+        self._rms_hist: deque    = deque(maxlen=self._MOTION_HIST)   # 近期窗 RMS(µV),求基线中值
+        self._bis_hist: deque    = deque(maxlen=self._SMOOTH_N)      # 近期输出 BIS,中值平滑
+        self._last_emitted: float | None = None                     # 上次对外输出(伪迹时保持它)
+
     # ── Model loading ─────────────────────────────────────────────────────────
 
     def _try_load_model(self, model_path: str | None):
         import torch
+        # 部署目标 = v17（shared BIS 头修过渡区 2× 误差 + 异方差不确定度 + 药物派生相位）。
+        # v17 的 .pt 需在 GPU 机器上训练产出后放入 outputs/checkpoints/v17/；放入即自动启用。
+        # 回退链按"已知可用 + val_mae"排序：v17 → v13(MAE 4.57，最优可用) → v14(shared 头,MAE 5.8)
+        # → best_model。回退时会 WARNING，避免静默跑到非目标模型。
         candidates = [
             model_path,
-            # v17 = shippable model: held-out TEST BIS MAE 5.03, PhAcc 82%, calibrated
-            # uncertainty, drug-derived phases, Phase-3 OFF (see training_history memory).
             str(_MODEL_ROOT / "outputs" / "checkpoints" / "v17" / "best_model_v3.pt"),
             str(_MODEL_ROOT / "outputs" / "checkpoints" / "v13" / "best_model_v3.pt"),
-            str(_MODEL_ROOT / "outputs" / "checkpoints" / "v11" / "best_model_v3.pt"),
+            str(_MODEL_ROOT / "outputs" / "checkpoints" / "v14" / "best_model_v3.pt"),
             str(_MODEL_ROOT / "outputs" / "checkpoints" / "best_model.pt"),
         ]
         for path in candidates:
@@ -156,13 +211,20 @@ class BISPredictor:
                 ck = torch.load(path, map_location="cpu", weights_only=False)
                 self._cfg = ck.get("cfg") or ck.get("config") or {}
 
-                # P3：从 config 覆盖校准参数（可选）
+                # 从 checkpoint 的 cfg.inference 读取校准"参数"(可调)。
                 inf = self._cfg.get("inference", {}) or {}
-                self._bias_cal_enabled  = bool(inf.get("calibrate_awake", self._bias_cal_enabled))
                 self._bias_target_awake = float(inf.get("awake_target_bis", self._bias_target_awake))
                 self._bias_window_n     = int(inf.get("calib_window_sec", self._bias_window_n))
                 self._bias_clamp        = float(inf.get("calib_clamp", self._bias_clamp))
                 self._bias_min_awake    = float(inf.get("calib_min_awake_pred", self._bias_min_awake))
+                # P0-2：awake 偏置的"开关"是部署级临床安全决策(默认关),**不允许被 checkpoint
+                # 内嵌的训练期 cfg.inference.calibrate_awake 静默打开**——否则用旧 yaml 训出的 .pt
+                # 会把已关掉的偏置又开起来。只接受显式运行时开关 EEG_CALIBRATE_AWAKE=1。
+                import os
+                env = os.environ.get("EEG_CALIBRATE_AWAKE")
+                if env is not None:
+                    self._bias_cal_enabled = env.strip().lower() in ("1", "true", "yes", "on")
+                # 否则保持 __init__ 的 False（不被 checkpoint 覆盖）。
 
                 # Channel count from checkpoint (1ch single-electrode board vs 2ch).
                 ch_list = (self._cfg.get("eeg", {}) or {}).get("channels")
@@ -179,7 +241,34 @@ class BISPredictor:
 
                 self._init_pipeline()
                 mae = ck.get("val_mae", "?")
-                logger.info(f"Loaded AnesthesiaNetV3 from {path}  val_mae={mae}")
+
+                # ── 诚实上报：记录实际加载的模型 + 能力，避免"声称 v17 实跑 v13"──────
+                self.model_path = str(path)
+                self.model_tag = next((t for t in ("v17", "v14", "v13", "v11")
+                                       if f"/{t}/" in str(path).replace("\\", "/")), "legacy")
+                mcfg = self._cfg.get("model", {}) or {}
+                has_uncertainty = bool(mcfg.get("bis_uncertainty", False))
+                self.model_caps = {
+                    "tag": self.model_tag,
+                    "bis_head": mcfg.get("bis_head", "gated"),
+                    "bis_uncertainty": has_uncertainty,
+                    "channels": self._n_channels,
+                    "val_mae": mae,
+                }
+                logger.info(f"Loaded AnesthesiaNetV3 [{self.model_tag}] from {path}  "
+                            f"val_mae={mae}  head={self.model_caps['bis_head']}  "
+                            f"uncertainty={has_uncertainty}  ch={self._n_channels}")
+                if self.model_tag != "v17":
+                    logger.warning(
+                        f"部署目标是 v17，但实际加载的是 [{self.model_tag}]。"
+                        f"v17 的改进（shared 头修过渡区 2× 误差、异方差不确定度、药物派生相位）"
+                        f"未生效。请在 GPU 机训练产出 outputs/checkpoints/v17/best_model_v3.pt 后放入。"
+                    )
+                if not has_uncertainty:
+                    logger.warning(
+                        f"[{self.model_tag}] 无异方差不确定度头 → pred_logvar 不会输出 → "
+                        f"UI 的 BIS 可信区间(last_bis_uncertainty)将恒为 N/A。仅 v17 提供该能力。"
+                    )
                 return
             except Exception as e:
                 logger.warning(f"Could not load {path}: {e}")
@@ -208,22 +297,37 @@ class BISPredictor:
 
     # ── Public API ────────────────────────────────────────────────────────────
 
-    def reset_state(self):
-        """Reset rolling buffer, GRU state, and amplitude calibration (call at session start)."""
+    def reset_state(self, keep_calibration: bool = False):
+        """
+        重置流式状态。
+
+        keep_calibration=False(默认,新会话/换病人):清空一切——GRU、缓冲、幅度标定、平滑、偏置。
+        keep_calibration=True(仅因采样率变更):只清 GRU + 滚动窗(时序断了、旧 fs 样本作废),
+            **保留每病例幅度标定 + 平滑/基线**。幅度尺度以 µV 计、与 fs 无关,复用即可稳定出值;
+            否则每次(常由体动致掉帧→测速抖动触发的)reset 都要 60s 重标定,期间用每窗回退归一化
+            → 输出骤降(实测:每 90s 一次 reset 制造 30 次骤降)。
+        """
         for buf in self._buf:
             buf.clear()
         self._hx = None
+        if keep_calibration and self._calibrated:
+            logger.info("reset_state(keep_calibration): 保留幅度标定/平滑,仅清 GRU+缓冲(采样率变更)")
+            return
         self._calib_buf = [[] for _ in range(self._n_channels)]
         self._norm_scale = np.ones(self._n_channels, dtype=np.float32)
         self._calibrated = False
         self._dead_channel = None
         self._mirror_source = None
+        # 重置运动伪迹保持 + 输出平滑
+        self._rms_hist.clear()
+        self._bis_hist.clear()
+        self._last_emitted = None
         # P3：重置 awake-anchor 偏置校准
         self._bias = 0.0
         self._bias_locked = False
         self._cal_preds = []
         self.last_bis_uncertainty = float("nan")
-        logger.debug("BISPredictor state + amplitude + bias calibration reset")
+        logger.debug("BISPredictor full reset (GRU + amplitude + bias)")
 
     def predict(self, eeg_epoch: np.ndarray, band_powers: dict) -> float:
         """
@@ -313,6 +417,8 @@ class BISPredictor:
                 # (near-flat) → the model collapses to a constant BIS. (Matches training intent:
                 # VitalDB was clean, so filter-then-MAD ≈ MAD-then-filter there.)
                 arr = _window_filter(arr[None, :], self._TARGET_FS, _fcfg)[0]
+                # 去眨眼:前额电极眨眼/眼动会把 MAD 顶大 → 标定尺度偏大 → 皮层电被压没。
+                arr = _deblink(arr, self._TARGET_FS)
 
                 # Standard MAD fallback
                 mad = float(np.median(np.abs(arr - np.median(arr))))
@@ -324,16 +430,27 @@ class BISPredictor:
                 total_p = psd_full.sum() + 1e-12
                 delta_ratio = psd_full[(freqs >= 0.5) & (freqs < 4.0)].sum() / total_p
 
-                if delta_ratio > 0.90:
-                    # Delta-dominant → use alpha+beta RMS as reference (time-domain)
-                    sos_ab = butter(4, [8.0 / (self._TARGET_FS / 2), 30.0 / (self._TARGET_FS / 2)],
-                                    btype='bandpass', output='sos')
-                    ab_signal = sosfiltfilt(sos_ab, arr)
-                    ab_rms = float(np.std(ab_signal))
-                    if ab_rms > 0.01:
-                        scale[ch] = max(ab_rms * 2.5, 0.1)
-                    else:
-                        scale[ch] = mad_sigma
+                # α+β 中频带 RMS:对 EOG(<4Hz)/漂移/EMG(>30Hz) 都更干净的幅度基准。
+                sos_ab = butter(4, [8.0 / (self._TARGET_FS / 2), 30.0 / (self._TARGET_FS / 2)],
+                                btype='bandpass', output='sos')
+                ab_rms = float(np.std(sosfiltfilt(sos_ab, arr)))
+
+                # 归一化基准 = 皮层 EEG 幅度(训练时干净 MAD 测的就是它)。前额脏信号的广带 MAD
+                # 会被 EOG(<4Hz)/漂移/EMG(>30Hz)顶大(实测达 284µV，真皮层仅 10–30µV)→ 把皮层电压没。
+                # α+β(8–30Hz) RMS 是抗污染的皮层幅度代理(避开 EOG/EMG)；×2.5 映射到全带等效 σ
+                # (清醒 δ≈2.5×α RMS)。
+                # P1-2(修订):当广带 MAD 远大于 α+β 重建值(>2×=基线被污染)或 δ 主导时改用 α+β 重建，
+                #   使脏信号的归一化逼近训练时的"干净 MAD"分布——这是【域适配】(把脏信号拉回训练
+                #   分布)，非偏斜；判据用相对比值(与量纲/montage 无关),清醒干净信号 ratio≈1 不触发。
+                #   (上一版误删此分支 → scale 由 64µV 退回 284µV;回放证据促成本次修订。)
+                ab_recon = ab_rms * 2.5
+                delta_dominant = delta_ratio > 0.90
+                contaminated   = (not delta_dominant) and (mad_sigma > 2.0 * ab_recon)
+                if (delta_dominant or contaminated) and ab_rms > 0.01:
+                    scale[ch] = max(ab_recon, 0.1)
+                    if contaminated:
+                        logger.info(f"ch{ch} 基线被污染(广带σ={mad_sigma:.0f}µV ≫ α+β重建{ab_recon:.0f}µV) "
+                                    f"→ 用 α+β 皮层幅度基准 scale={scale[ch]:.1f}")
                 else:
                     scale[ch] = mad_sigma
 
@@ -389,6 +506,37 @@ class BISPredictor:
         except Exception as e:
             logger.warning(f"Filter error: {e}")
 
+        # P1-4：爆发抑制(BS)安全权威 —— 必须在任何伪迹插值之前、在归一化前的 µV 窗(ch0=真实信号)
+        #        上量抑制占比。抑制段临床定义 <5µV(Burst suppression: PMC8648516 / Wikipedia)。
+        #        这是独立于 NN 的硬安全网：NN 可能不给 BSR 特征足够权重 → 漏判过深；此处强制压低 BIS。
+        #        win_max>20µV 门控排除"平线/电极脱落"被误当抑制(脱落时无爆发)。
+        supp_frac = float(np.mean(np.abs(window[0]) < 5.0))
+        win_max   = float(np.max(np.abs(window[0])))
+        win_rms   = float(np.std(window[0]))   # 用于运动伪迹检测(下方)
+
+        # P1-3：每窗去伪迹(前端去 EOG/EMG)。前额采集先天受眼电/肌电污染；训练数据(VitalDB)本就干净。
+        #        对脏信号去伪迹 = 把它拉回训练分布(对干净信号 frac≈0 原样返回)，优于"靠归一化补偿"
+        #        (P1-2 已移除的偏斜支路)。**抑制主导(supp_frac≥0.5)时跳过** —— 此时大瞬变是真实
+        #        爆发(burst)而非眨眼，去伪迹会误删爆发；deblink 仅用于清醒/浅麻醉的眼电。
+        if supp_frac < 0.5:
+            for ch in range(self._n_channels):
+                window[ch] = _deblink(window[ch], self._TARGET_FS)
+
+        # 运动伪迹保持:窗 RMS 相对近期基线突跳(>_MOTION_JUMP×)⇒ 体动 → 冻结 GRU、保持上次输出，
+        # 不让坏窗污染递归状态/画出骤降。基线用 median(抗离群);渐变(麻醉加深)会被基线跟随,不误判。
+        # (抑制主导窗不参与:那是真实 BS,不是体动。)
+        motion = False
+        if self._calibrated and supp_frac < 0.5 and len(self._rms_hist) >= self._MOTION_MIN_HIST:
+            base = float(np.median(self._rms_hist))
+            if base > 1e-6 and win_rms > self._MOTION_JUMP * base:
+                motion = True
+        self._rms_hist.append(win_rms)
+        if motion and self._last_emitted is not None:
+            logger.info(f"运动伪迹:窗RMS={win_rms:.0f}µV ≫ 基线{base:.0f}µV(×{win_rms/base:.1f}) "
+                        f"→ 冻结GRU/保持BIS={self._last_emitted:.0f}")
+            self._bis_hist.append(self._last_emitted)   # 保持平滑缓冲连续
+            return self._last_emitted
+
         # 6. Per-session amplitude normalisation (matching training), now on the mains-free
         #    signal. During the first _CALIB_SEC we use a per-window fallback (MAD of the
         #    current filtered 4-second slice) so inference isn't blocked during calibration.
@@ -436,13 +584,22 @@ class BISPredictor:
             bis_norm = float(out["pred_bis"].squeeze().cpu().item())   # [0, 1]
             raw_bis  = float(np.clip(bis_norm * 100.0, 0.0, 100.0))
 
+            # P1-4：BSR 安全权威。>50% 窗 <5µV 且存在爆发(win_max>20µV) ⇒ 爆发抑制(过深)，
+            #        强制 BIS 进入低区间(50%→25, 80%→10, 100%→0)，独立于 NN 输出。
+            if supp_frac > 0.5 and win_max > 20.0:
+                ceiling = float(np.clip(50.0 * (1.0 - supp_frac), 0.0, 30.0))
+                if raw_bis > ceiling:
+                    logger.info(f"BSR 安全权威：抑制占比={supp_frac:.0%}(爆发≈{win_max:.0f}µV) "
+                                f"→ BIS {raw_bis:.0f}→{ceiling:.0f}")
+                    raw_bis = ceiling
+
             # P2：异方差不确定度（Laplace 尺度 b → BIS 点数），供 UI 显示可信区间
             if "pred_logvar" in out:
                 logb = float(out["pred_logvar"].squeeze().cpu().item())
                 self.last_bis_uncertainty = float(np.exp(logb) * 100.0)
 
-            # P3：每病例 awake-anchor 偏置校准
-            return self._apply_bias_calibration(raw_bis)
+            # P3：每病例 awake-anchor 偏置校准 → 再经中值平滑对外输出
+            return self._emit(self._apply_bias_calibration(raw_bis))
 
         except Exception as e:
             logger.error(f"Model inference error: {e}")
@@ -475,6 +632,13 @@ class BISPredictor:
                                 f"median_pred={med:.1f} < {self._bias_min_awake:.0f})")
                 self._bias_locked = True
         return float(np.clip(raw_bis + self._bias, 0.0, 100.0))
+
+    def _emit(self, val: float) -> float:
+        """对外输出前做中值平滑(≈_SMOOTH_N 秒),压掉残余的单帧尖刺;并记录为'上次有效值'供伪迹保持。"""
+        self._bis_hist.append(val)
+        out = float(np.median(self._bis_hist))
+        self._last_emitted = out
+        return out
 
     # ── Heuristic fallback ────────────────────────────────────────────────────
 

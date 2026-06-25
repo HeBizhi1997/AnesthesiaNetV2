@@ -107,6 +107,26 @@ class EEGPreprocessor:
             sections.extend([nsos, nsos, nsos])
         sections.append(lp)
         self._sf_broad = _StreamSOS(np.vstack(sections))
+
+        # ── Wideband EMG display channel ─────────────────────────────────────────
+        # 真实额肌/颞肌肌电主能量在 ~30–100Hz,被脑电用的 47Hz 低通切掉。这里【从 RAW 信号】单独
+        # 取一条 30Hz–min(100, ~Nyquist) 的肌电带(必须陷掉 50/100Hz 工频,否则该带几乎全是市电)。
+        # 受采样率限制:125Hz 时上限≈60Hz,250Hz(电池)时可达 100Hz → 才能看到真肌电。
+        emg_hi = min(100.0, nyq * 0.95)
+        emg_secs = []
+        if emg_hi > 30.0:
+            emg_secs.append(butter(4, 30.0 / nyq, btype="high", output="sos"))
+            for mf in (50.0, 100.0):
+                if mf < nyq:
+                    nb2, na2 = iirnotch(mf / nyq, 30.0)
+                    nsos2 = tf2sos(nb2, na2)
+                    emg_secs.extend([nsos2, nsos2])   # cascade ×2 for deeper mains rejection
+            emg_secs.append(butter(4, emg_hi / nyq, btype="low", output="sos"))
+            self._sf_emg = _StreamSOS(np.vstack(emg_secs))
+            self._emg_hi = emg_hi
+        else:
+            self._sf_emg = None
+            self._emg_hi = 0.0
         # Per-band streaming bandpass (on the broadband output). γ tightened to 30–45 Hz to
         # avoid the 47 Hz broadband edge + 50 Hz mains shoulder that otherwise show as noise.
         disp_bands = dict(self.BANDS)
@@ -164,6 +184,15 @@ class EEGPreprocessor:
             waves[band] = sf(filtered) if sf is not None else np.zeros_like(filtered)
 
         raw_ch = chunk - chunk.mean()   # raw_eeg output: this chunk, DC-removed for display
+
+        # Wideband EMG display channel — filtered off the RAW chunk (NOT the 47Hz-lowpassed
+        # `filtered`), so it can carry the real >47Hz muscle activity when fs allows (≥250Hz).
+        if self._sf_emg is not None:
+            emg_wave = self._sf_emg(chunk)
+            emg_amplitude_uv = float(np.std(emg_wave))
+        else:
+            emg_wave = np.zeros_like(filtered)
+            emg_amplitude_uv = 0.0
 
         # Blink-rejected copy for ENERGY estimates ONLY (band-power ratios + DSA). The raw
         # waveform and the per-band display waveforms above keep their blinks untouched.
@@ -246,6 +275,8 @@ class EEGPreprocessor:
             "alpha_wave":       waves["alpha"].tolist(),
             "beta_wave":        waves["beta"].tolist(),
             "gamma_wave":       waves["gamma"].tolist(),
+            "emg_wave":         emg_wave.tolist(),          # 宽带肌电(≥30Hz,off raw)显示通道
+            "emg_amplitude_uv": emg_amplitude_uv,           # 肌电 RMS(µV),反映绝对肌肉活动水平
             "delta_power":      powers["delta"],
             "theta_power":      powers["theta"],
             "alpha_power":      powers["alpha"],
@@ -383,6 +414,8 @@ class EEGPreprocessor:
         """Clear rolling buffers + streaming filter state (call at session start)."""
         self._psd_buffer.clear()
         self._sf_broad.reset()
+        if getattr(self, "_sf_emg", None) is not None:
+            self._sf_emg.reset()
         for sf in self._sf_bands.values():
             if sf is not None:
                 sf.reset()
@@ -535,6 +568,7 @@ class EEGPreprocessor:
         return {
             "raw_eeg": [], "filtered_eeg": [], "delta_wave": [], "theta_wave": [],
             "alpha_wave": [], "beta_wave": [], "gamma_wave": [],
+            "emg_wave": [], "emg_amplitude_uv": 0.0,
             "delta_power": 0.0, "theta_power": 0.0, "alpha_power": 0.0,
             "beta_power": 0.0, "gamma_power": 0.0,
             "dsa_matrix": [], "dsa_frequencies": [], "dsa_times": [],

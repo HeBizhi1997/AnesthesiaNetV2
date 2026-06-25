@@ -53,18 +53,25 @@ app.include_router(simulate_router)
 
 @app.on_event("startup")
 async def startup():
-    # Preferred checkpoint: latest v13 model in the tianjin outputs folder
+    # 部署目标 = v17（shared 头 + 不确定度 + 药物派生相位）。一旦 v17 的 .pt 放入即自动启用。
+    # v17 需在 GPU 机训练产出（本机 CPU 无法训练）。回退链按 val_mae 排序，回退时 WARNING。
     root = Path(__file__).resolve().parents[2]   # tianjin/
     candidates = [
-        root / "outputs" / "checkpoints" / "v13" / "best_model_v3.pt",
-        root / "outputs" / "checkpoints" / "v11" / "best_model_v3.pt",
+        root / "outputs" / "checkpoints" / "v17" / "best_model_v3.pt",  # 目标
+        root / "outputs" / "checkpoints" / "v13" / "best_model_v3.pt",  # 回退：MAE 4.57(最优可用)
+        root / "outputs" / "checkpoints" / "v14" / "best_model_v3.pt",  # 回退：shared 头(MAE 5.8)
         root / "outputs" / "checkpoints" / "best_model.pt",
     ]
     model_path = next((p for p in candidates if p.exists()), None)
     init_services(model_path=str(model_path) if model_path else None)
-    logger.info(f"EEG Processing Service started on http://localhost:8765")
+    logger.info("EEG Processing Service started on http://localhost:8765")
     if model_path:
         logger.info(f"Using checkpoint: {model_path}")
+        if "v17" not in str(model_path).replace("\\", "/"):
+            logger.warning(
+                "未找到 v17 checkpoint —— 当前回退到非目标模型。"
+                "请在 GPU 机执行训练并把 outputs/checkpoints/v17/best_model_v3.pt 放入本机。"
+            )
     else:
         logger.warning("No model checkpoint found – using heuristic BIS")
 

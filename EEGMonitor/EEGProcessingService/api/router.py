@@ -36,6 +36,13 @@ _spindle: SpindleDetector | None = None
 _propofol_alpha_factor: float = 0.0   # was 1.8 — disabled pending clinical validation
 _propofol_alpha_cap:    float = 0.30
 
+# P1-5：采样率变更去抖。本板采样率随供电在 125/250Hz 间变化，自动测速可能在边界抖动；
+# 每次抖动都 reset 会清空 GRU+幅度标定 → BIS 跳变/反复预热。要求新采样率连续 N 个 epoch
+# 稳定才真正采纳(真实供电切换会持续，瞬时抖动会被过滤)。
+_RATE_STABLE_EPOCHS: int = 3
+_rate_pending: int | None = None
+_rate_pending_count: int = 0
+
 
 def init_services(model_path: str | None = None):
     global _preprocessor, _hrv, _bis_predictor, _entropy, _fnox, _spindle
@@ -50,7 +57,17 @@ def init_services(model_path: str | None = None):
 
 @router.get("/health")
 async def health():
-    return {"status": "ok", "model_loaded": _bis_predictor is not None and _bis_predictor._model is not None}
+    loaded = _bis_predictor is not None and _bis_predictor._model is not None
+    caps = _bis_predictor.model_caps if _bis_predictor is not None else {}
+    return {
+        "status": "ok",
+        "model_loaded": loaded,
+        # 诚实上报实际加载的模型（避免"声称 v17 实跑 v13"）
+        "model_tag": caps.get("tag", "none"),
+        "model_is_target_v17": caps.get("tag") == "v17",
+        "model_caps": caps,
+        "awake_bias_enabled": bool(_bis_predictor._bias_cal_enabled) if _bis_predictor else False,
+    }
 
 
 @router.post("/reset")
@@ -79,14 +96,27 @@ async def process_eeg(req: ProcessRequest):
     if eeg.ndim != 2 or eeg.shape[0] < 32:
         raise HTTPException(400, f"Invalid EEG shape: {eeg.shape}")
 
-    # Update sample rate if changed
-    if _preprocessor.fs != req.sample_rate:
-        _preprocessor.fs = req.sample_rate
-    if _bis_predictor is not None and _bis_predictor.input_fs != req.sample_rate:
-        _bis_predictor.input_fs = req.sample_rate
-        _bis_predictor.reset_state()
-    if _spindle is not None and _spindle.fs != req.sample_rate:
-        _spindle.fs = req.sample_rate
+    # Update sample rate if changed — P1-5: debounced to survive auto-rate flicker.
+    global _rate_pending, _rate_pending_count
+    if req.sample_rate != _preprocessor.fs:
+        if req.sample_rate == _rate_pending:
+            _rate_pending_count += 1
+        else:
+            _rate_pending, _rate_pending_count = req.sample_rate, 1
+        if _rate_pending_count >= _RATE_STABLE_EPOCHS:
+            logger.info(f"采样率稳定变更 {_preprocessor.fs}→{req.sample_rate}Hz "
+                        f"(连续{_rate_pending_count}个epoch) → 采纳(不重置 BIS 流式状态)")
+            _preprocessor.fs = req.sample_rate
+            if _bis_predictor is not None:
+                # 仅更新 input_fs。**不 reset** BIS 推理器:GRU 在 128Hz 重采样窗上以 ~1步/秒运行,
+                # 与输入 fs 无关;滚动缓冲也是 128Hz、依然有效;幅度标定以 µV 计、与 fs 无关。
+                # 之前在采样率变更时 reset → 清 GRU + 60s 重标定 → BIS 骤降(体动致测速抖动时尤甚)。
+                _bis_predictor.input_fs = req.sample_rate
+            if _spindle is not None:
+                _spindle.fs = req.sample_rate
+            _rate_pending, _rate_pending_count = None, 0
+    else:
+        _rate_pending, _rate_pending_count = None, 0   # 回到当前值，清除待定
 
 
     # 1. EEG preprocessing (with optional device band powers for cross-validation)
@@ -184,6 +214,8 @@ async def process_eeg(req: ProcessRequest):
         alpha_wave=eeg_result["alpha_wave"],
         beta_wave=eeg_result["beta_wave"],
         gamma_wave=eeg_result["gamma_wave"],
+        emg_wave=eeg_result.get("emg_wave", []),
+        emg_amplitude_uv=eeg_result.get("emg_amplitude_uv", 0.0),
         delta_power=eeg_result["delta_power"],
         theta_power=eeg_result["theta_power"],
         alpha_power=eeg_result["alpha_power"],

@@ -169,7 +169,9 @@ training:
   huber_delta: 0.05
 
 inference:
-  calibrate_awake:       true
+  # P0-2：awake-anchor 常数偏置默认关闭（量程非线性 + 方向不安全，见 bis_predictor.py 说明）。
+  # 如需临床对照实验再显式开启。
+  calibrate_awake:       false
   awake_target_bis:      95.0
   calib_window_sec:      60
   calib_clamp:           15.0

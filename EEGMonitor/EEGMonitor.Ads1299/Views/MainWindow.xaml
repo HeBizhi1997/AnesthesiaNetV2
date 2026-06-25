@@ -187,7 +187,7 @@
                                 <StackPanel Grid.Row="2" VerticalAlignment="Center"><TextBlock Text="θ 波" Foreground="#FF06B6D4" FontWeight="Bold" FontSize="12"/><TextBlock Text="4–8 Hz" Foreground="{StaticResource MutedBrush}" FontSize="10"/></StackPanel>
                                 <StackPanel Grid.Row="3" VerticalAlignment="Center"><TextBlock Text="α 波" Foreground="{StaticResource AlphaBrush}" FontWeight="Bold" FontSize="12"/><TextBlock Text="8–13 Hz" Foreground="{StaticResource MutedBrush}" FontSize="10"/></StackPanel>
                                 <StackPanel Grid.Row="4" VerticalAlignment="Center"><TextBlock Text="β 波" Foreground="{StaticResource BetaBrush}" FontWeight="Bold" FontSize="12"/><TextBlock Text="13–30 Hz" Foreground="{StaticResource MutedBrush}" FontSize="10"/></StackPanel>
-                                <StackPanel Grid.Row="5" VerticalAlignment="Center"><TextBlock Text="γ 波" Foreground="{StaticResource DeltaBrush}" FontWeight="Bold" FontSize="12"/><TextBlock Text="30–70 Hz" Foreground="{StaticResource MutedBrush}" FontSize="10"/></StackPanel>
+                                <StackPanel Grid.Row="5" VerticalAlignment="Center"><TextBlock Text="EMG 肌电" Foreground="#EF4444" FontWeight="Bold" FontSize="12"/><TextBlock Text="≥30 Hz (off raw)" Foreground="{StaticResource MutedBrush}" FontSize="10"/><TextBlock Text="{Binding EmgAmplitudeText}" Foreground="#EF4444" FontSize="10" FontWeight="Bold"/></StackPanel>
                             </Grid>
                             <lvc:CartesianChart Grid.Column="1" Series="{Binding EegSeries}"
                                                 XAxes="{Binding EegXAxes}" YAxes="{Binding EegYAxes}"
@@ -395,12 +395,22 @@
                                         <TextBlock Grid.Column="2" Text="{Binding BetaPct}" Foreground="{StaticResource TextBrush}" FontSize="13" FontWeight="Bold" HorizontalAlignment="Right" VerticalAlignment="Center"/>
                                         <TextBlock Grid.Column="3" Text="{Binding BetaPow}" Foreground="{StaticResource MutedBrush}" FontSize="12" HorizontalAlignment="Right" VerticalAlignment="Center"/>
                                     </Grid>
+                                    <!-- 分隔:以下为伪迹污染指标(非脑波),不参与上面 4 段占比归一化;占比口径=占全谱 -->
+                                    <Border Height="1" Background="{StaticResource PanelBorder}" Margin="0,4,0,2"/>
+                                    <!-- EOG 眼电/慢漂移 (0.5–2Hz):前额低频几乎全是眼动/眨眼/基线漂移;它与 δ 重叠 → EOG 大即 δ 大 -->
+                                    <Grid Margin="0,2">
+                                        <Grid.ColumnDefinitions><ColumnDefinition Width="16"/><ColumnDefinition Width="*"/><ColumnDefinition Width="44"/><ColumnDefinition Width="58"/></Grid.ColumnDefinitions>
+                                        <Ellipse Grid.Column="0" Width="11" Height="11" Fill="#22D3EE" VerticalAlignment="Center"/>
+                                        <TextBlock Grid.Column="1" Text="EOG 眼电 (0.5–2)" Foreground="#22D3EE" FontSize="12" VerticalAlignment="Center"/>
+                                        <TextBlock Grid.Column="2" Text="{Binding EogPct}" Foreground="#22D3EE" FontSize="13" FontWeight="Bold" HorizontalAlignment="Right" VerticalAlignment="Center"/>
+                                        <TextBlock Grid.Column="3" Text="{Binding EogPow}" Foreground="{StaticResource MutedBrush}" FontSize="12" HorizontalAlignment="Right" VerticalAlignment="Center"/>
+                                    </Grid>
                                     <Grid Margin="0,2">
                                         <Grid.ColumnDefinitions><ColumnDefinition Width="16"/><ColumnDefinition Width="*"/><ColumnDefinition Width="44"/><ColumnDefinition Width="58"/></Grid.ColumnDefinitions>
                                         <Ellipse Grid.Column="0" Width="11" Height="11" Fill="{StaticResource GammaBrush}" VerticalAlignment="Center"/>
-                                        <TextBlock Grid.Column="1" Text="γ (30–70)" Foreground="{StaticResource MutedBrush}" FontSize="12" VerticalAlignment="Center"/>
-                                        <TextBlock Grid.Column="2" Text="{Binding GammaPct}" Foreground="{StaticResource TextBrush}" FontSize="13" FontWeight="Bold" HorizontalAlignment="Right" VerticalAlignment="Center"/>
-                                        <TextBlock Grid.Column="3" Text="{Binding GammaPow}" Foreground="{StaticResource MutedBrush}" FontSize="12" HorizontalAlignment="Right" VerticalAlignment="Center"/>
+                                        <TextBlock Grid.Column="1" Text="EMG 肌电 (≥30 宽带)" Foreground="{StaticResource GammaBrush}" FontSize="12" VerticalAlignment="Center"/>
+                                        <TextBlock Grid.Column="2" Text="{Binding EmgPct}" Foreground="{StaticResource GammaBrush}" FontSize="13" FontWeight="Bold" HorizontalAlignment="Right" VerticalAlignment="Center"/>
+                                        <TextBlock Grid.Column="3" Text="{Binding EmgPow}" Foreground="{StaticResource MutedBrush}" FontSize="12" HorizontalAlignment="Right" VerticalAlignment="Center"/>
                                     </Grid>
                                 </StackPanel>
                             </Grid>
@@ -408,7 +418,7 @@
                             <!-- ── 右:频谱图 (功率谱密度) ── -->
                             <Border Grid.Column="1" BorderBrush="{StaticResource PanelBorder}" BorderThickness="1,0,0,0" Margin="6,0,0,0" Padding="6,0,0,0">
                                 <DockPanel>
-                                    <TextBlock DockPanel.Dock="Top" Text="功率谱密度 (PSD · dB/Hz · 0–70 Hz)" Foreground="{StaticResource MutedBrush}" FontSize="11" Margin="2,0,0,2"/>
+                                    <TextBlock DockPanel.Dock="Top" Text="功率谱密度 (PSD · dB/Hz · 0–45 Hz)" Foreground="{StaticResource MutedBrush}" FontSize="11" Margin="2,0,0,2"/>
                                     <lvc:CartesianChart Series="{Binding SpectrumSeries}" XAxes="{Binding SpectrumXAxes}"
                                                         YAxes="{Binding SpectrumYAxes}" Sections="{Binding SpectrumSections}"
                                                         TooltipPosition="Hidden"/>

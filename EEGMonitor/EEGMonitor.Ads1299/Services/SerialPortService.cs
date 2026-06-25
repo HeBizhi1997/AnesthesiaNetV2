@@ -17,10 +17,13 @@ namespace Ads1299Monitor.Services;
 ///   [6+N]      DataCheck   XOR(Data)
 ///   [7+N]      Tail        请求 0x5A / 响应 0x55
 ///
-/// VERIFIED on the 2026-05 board (COM6): the firmware ALWAYS streams 8 floats/sample
-/// interleaved and IGNORES both chMask and the rate request — only column 0 (CH1) carries
-/// the differential electrode signal; columns 1–7 are exactly 0.0, and the per-channel rate
-/// is ~250 Hz. We de-interleave and keep CH0. Python owns all filtering.
+/// VERIFIED on the 2026-05 board: the firmware ALWAYS streams 8 floats/sample interleaved and
+/// IGNORES both chMask and the rate request — only column 0 (CH1) carries the differential
+/// electrode signal; columns 1–7 are exactly 0.0. The per-channel output rate is fixed at
+/// ~125 Hz (2026-06 byte-level throughput measurement: 12 samples/frame × ~10.3 frames/s;
+/// an earlier "~250 Hz" note was wrong). The configured SampleRate MUST match this real rate,
+/// otherwise every downstream spectrum is scaled 2× in frequency. We de-interleave and keep
+/// CH0; Python owns all filtering.
 /// </summary>
 public sealed class SerialPortService : IDisposable
 {
@@ -67,12 +70,22 @@ public sealed class SerialPortService : IDisposable
     private bool _loggedFirstBytes;
     private readonly int _streamChannels = STREAM_CHANNELS;
 
+    // ── Runtime sample-rate measurement ──
+    // The board ignores the rate request and its TRUE rate depends on the power source
+    // (≈125 Hz on mains/DC adapter, ≈250 Hz on battery — measured byte-exact). A hardcoded fs
+    // is therefore wrong half the time and scales the whole spectrum. We measure the actual
+    // arriving rate over a rolling window and snap to the nearest supported rate.
+    private static readonly int[] SupportedRates = { 125, 250, 500, 1000, 2000 };
+    private DateTime _rateWinStart;
+    private long _rateWinSamples;
+
     public bool IsConnected => _port?.IsOpen ?? false;
     public string PortName => _port?.PortName ?? string.Empty;
 
     public event Action<EEGSample>? SampleReceived;
     public event Action<string>? ConnectionStatusChanged;
     public event Action<Exception>? ErrorOccurred;
+    public event Action<int>? SampleRateChanged;   // fires when the measured rate snaps to a new value
 
     public SerialPortService(ILogger<SerialPortService> logger) => _logger = logger;
 
@@ -82,7 +95,10 @@ public sealed class SerialPortService : IDisposable
         lock (_bufLock) _buffer.Clear();
         _totalBytesIn = _framesDecoded = _dataFramesDecoded = _samplesEmitted = 0;
         _loggedFirstBytes = false;
-        if (sampleRate is 250 or 500 or 1000 or 2000) SampleRate = sampleRate;
+        _rateWinStart = default; _rateWinSamples = 0;
+        // 实测(字节级吞吐核对)本板 CH0 真实输出 ~125 Hz,固件忽略速率请求 → 必须允许 125,
+        // 否则会回落到默认 250,使下游频谱整体放大 2×(真实 10Hz α 被算到 β,α 段实为 4–6.5Hz θ)。
+        if (sampleRate is 125 or 250 or 500 or 1000 or 2000) SampleRate = sampleRate;
 
         try
         {
@@ -307,6 +323,28 @@ public sealed class SerialPortService : IDisposable
             SampleReceived?.Invoke(new EEGSample(ts, new[] { (double)uv }));
         }
         _samplesEmitted += nSamples;
+        MeasureRate(nSamples);
+    }
+
+    // Rolling-window measurement of the real arriving sample rate. When the snapped estimate
+    // differs from the current SampleRate, update it (so timestamp reconstruction follows) and
+    // notify subscribers so the pipeline + Python fs track the true rate.
+    private void MeasureRate(int nSamples)
+    {
+        if (_rateWinStart == default) { _rateWinStart = DateTime.Now; _rateWinSamples = 0; return; }
+        _rateWinSamples += nSamples;
+        double elapsed = (DateTime.Now - _rateWinStart).TotalSeconds;
+        if (elapsed < 2.0) return;                       // need ≥2 s for a stable estimate
+        double measured = _rateWinSamples / elapsed;
+        _rateWinStart = DateTime.Now; _rateWinSamples = 0;
+        int snapped = SupportedRates.OrderBy(r => Math.Abs(r - measured)).First();
+        if (snapped != SampleRate)
+        {
+            _logger.LogInformation("Measured EEG rate {Measured:0}Hz → {Snapped}Hz (was {Old}Hz)",
+                measured, snapped, SampleRate);
+            SampleRate = snapped;
+            SampleRateChanged?.Invoke(snapped);
+        }
     }
 
     public void Dispose() => Disconnect();

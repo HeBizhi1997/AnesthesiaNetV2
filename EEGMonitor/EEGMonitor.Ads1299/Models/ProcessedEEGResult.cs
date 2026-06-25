@@ -24,6 +24,8 @@ public sealed class ProcessedEEGResult
     [JsonProperty("alpha_wave")]   public double[] AlphaWave { get; set; } = Array.Empty<double>();
     [JsonProperty("beta_wave")]    public double[] BetaWave { get; set; } = Array.Empty<double>();
     [JsonProperty("gamma_wave")]   public double[] GammaWave { get; set; } = Array.Empty<double>();
+    [JsonProperty("emg_wave")]     public double[] EmgWave { get; set; } = Array.Empty<double>();   // 宽带肌电(≥30Hz)显示通道
+    [JsonProperty("emg_amplitude_uv")] public double EmgAmplitudeUv { get; set; }                  // 肌电 RMS(µV)
 
     // ── Band power ratios (0-1) ──
     [JsonProperty("delta_power")] public double DeltaPower { get; set; }

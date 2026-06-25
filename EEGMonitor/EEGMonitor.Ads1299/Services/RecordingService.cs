@@ -30,12 +30,19 @@ public sealed class RecordingService : IDisposable
     private readonly RecordingConfig _cfg;
     private readonly PatientConfig _patient;
 
+    private const string RECORD_DESC =
+        "[int64 ticks][byte tag]; tag1 EEG=[float32 uv]; tag2 VITAL=[float32 pr][float32 spo2][float32 pi]; tag3 PPG=[int32 ir][int32 red]";
+
     private BinaryWriter? _rawWriter;
     private StreamWriter? _inferenceWriter;
     private StreamWriter? _eventWriter;
     private readonly object _rawLock = new();
     private readonly object _infLock = new();
     private readonly object _evtLock = new();
+    private readonly object _metaLock = new();
+
+    private int _eegSampleRate;          // 真实采样率(开机为种子值,自动测速后被 UpdateSampleRate 更新)
+    private DateTime _sessionStarted;
 
     public bool IsRecording { get; private set; }
     public string? SessionDirectory { get; private set; }
@@ -76,16 +83,47 @@ public sealed class RecordingService : IDisposable
         _inferenceWriter = new StreamWriter(Path.Combine(dir, "inference.jsonl"), append: false);
         _eventWriter = new StreamWriter(Path.Combine(dir, "events.jsonl"), append: false);
 
-        File.WriteAllText(Path.Combine(dir, "raw_signal.meta.json"), JsonConvert.SerializeObject(new
-        {
-            format = "tagged-le-binary",
-            record = "[int64 ticks][byte tag]; tag1 EEG=[float32 uv]; tag2 VITAL=[float32 pr][float32 spo2][float32 pi]; tag3 PPG=[int32 ir][int32 red]",
-            eeg_sample_rate_hz = sampleRate,
-            started = DateTime.Now.ToString("o"),
-        }, Formatting.Indented));
+        _eegSampleRate = sampleRate;
+        _sessionStarted = DateTime.Now;
+        WriteMeta();
 
         IsRecording = true;
         _logger.LogInformation("Recording started → {Dir}", dir);
+    }
+
+    /// <summary>
+    /// 写/重写 raw_signal.meta.json。采样率字段用 <see cref="_eegSampleRate"/>(实测),回放据此解读。
+    /// </summary>
+    private void WriteMeta()
+    {
+        if (SessionDirectory is not { } dir) return;
+        lock (_metaLock)
+        {
+            try
+            {
+                File.WriteAllText(Path.Combine(dir, "raw_signal.meta.json"), JsonConvert.SerializeObject(new
+                {
+                    format = "tagged-le-binary",
+                    record = RECORD_DESC,
+                    eeg_sample_rate_hz = _eegSampleRate,
+                    eeg_sample_rate_source = "auto-measured",   // 运行时实测,非配置种子
+                    started = _sessionStarted.ToString("o"),
+                }, Formatting.Indented));
+            }
+            catch (Exception ex) { _logger.LogWarning(ex, "写 raw_signal.meta.json 失败"); }
+        }
+    }
+
+    /// <summary>
+    /// 采集开始后串口自动测得真实采样率时调用,更新 meta(本板采样率随供电在 125/250Hz 间变化,
+    /// 种子值可能不准;不更新会导致回放按错误 fs 解读、频谱整体平移)。
+    /// </summary>
+    public void UpdateSampleRate(int sampleRate)
+    {
+        if (!IsRecording || sampleRate <= 0 || sampleRate == _eegSampleRate) return;
+        _eegSampleRate = sampleRate;
+        WriteMeta();
+        _logger.LogInformation("Recording meta 采样率更新为 {Fs}Hz(实测)", sampleRate);
     }
 
     public void Stop()

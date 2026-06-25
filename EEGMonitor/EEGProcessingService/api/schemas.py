@@ -33,6 +33,8 @@ class ProcessResponse(BaseModel):
     alpha_wave: list[float] = []
     beta_wave: list[float] = []
     gamma_wave: list[float] = []
+    emg_wave: list[float] = []          # wideband EMG (≥30 Hz, off raw) display channel
+    emg_amplitude_uv: float = 0.0       # EMG RMS [µV] — absolute muscle activity level
 
     # Band power ratios (0-1)
     delta_power: float = 0.0

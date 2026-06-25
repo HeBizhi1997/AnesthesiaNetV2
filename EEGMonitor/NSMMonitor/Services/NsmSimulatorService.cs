@@ -131,6 +131,19 @@ public sealed class NsmSimulatorService : INsmDataSource, IDisposable
         int beta  = (int)Clamp(-8 + csi * 0.1 + Noise(3), -40, 40);
         int gamma = (int)Clamp(-15 + Noise(3), -40, 40);
 
+        int sef95 = (int)Clamp(8 + csi * 0.3 + Noise(2), 1, 44);
+
+        // 密度谱阵列 (DSA)：44 个 1Hz 频段强度，δ/θ 与 α 两个峰，并在 SEF95 之上衰减
+        var dsa = new byte[44];
+        for (int f = 1; f <= 44; f++)
+        {
+            double lowHump = Math.Exp(-Math.Pow((f - 3.0) / 6.0, 2));    // δ/θ 主峰 ~3 Hz
+            double alphaHump = 0.5 * Math.Exp(-Math.Pow((f - 10.0) / 3.0, 2)); // α 峰 ~10 Hz
+            double rolloff = f <= sef95 ? 1.0 : Math.Exp(-(f - sef95) / 4.0);
+            double v = 235 * (lowHump + alphaHump) * rolloff + Noise(12);
+            dsa[f - 1] = (byte)Clamp(v, 0, 255);
+        }
+
         // 偶发临床事件（约每 20 包一次）
         int eventNumber = 0;
         NSMEventType eventType = NSMEventType.General;
@@ -169,8 +182,9 @@ public sealed class NsmSimulatorService : INsmDataSource, IDisposable
             AlphaPowerDb = alpha,
             BetaPowerDb = beta,
             GammaPowerDb = gamma,
-            SEF95 = (int)Clamp(8 + csi * 0.3 + Noise(2), 1, 44),
+            SEF95 = sef95,
             EOG = _rng.Next(0, 30),
+            Dsa = dsa,
         };
     }
 

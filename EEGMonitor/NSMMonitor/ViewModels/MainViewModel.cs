@@ -18,7 +18,10 @@ namespace NSMMonitor.ViewModels;
 public sealed partial class MainViewModel : ObservableObject
 {
     private const int EEG_WINDOW = 600;     // 显示最近 6 秒波形
+    private const int EEG_SAMPLES_PER_PACKET = 100;
     private const int TREND_WINDOW_SEC = 300;
+    private const int DSA_BINS = 44;        // 密度谱阵列频段数 (1-44 Hz)
+    private const int DSA_COLS = 300;       // 频谱图时间列数（约 5 分钟，每帧一列）
 
     private readonly NsmSerialService _serial;
     private readonly NsmSimulatorService _simulator;
@@ -28,12 +31,16 @@ public sealed partial class MainViewModel : ObservableObject
 
     private INsmDataSource _source;
     private double _eegX;
-    private DateTime _trendStart = DateTime.Now;
+    private DateTime _firstPacketTs;
+    private bool _firstPacketSeen;
 
     private readonly LineSeries _eegSeries;
     private readonly LineSeries _csiTrend;
     private readonly LineSeries _noxTrend;
     private readonly LineSeries _sefTrend;
+
+    private readonly HeatMapSeries _dsaSeries;
+    private readonly List<byte[]> _dsaColumns = new(DSA_COLS);
 
     public MainViewModel(NsmSerialService serial, NsmSimulatorService simulator,
         NsmPlaybackService playback, NsmRecordingService recorder, ILogger<MainViewModel> logger)
@@ -50,14 +57,25 @@ public sealed partial class MainViewModel : ObservableObject
         _noxTrend  = new LineSeries { Title = "NOX", Color = OxyColor.FromRgb(0x2D, 0xD4, 0xBF), StrokeThickness = 1.6 };
         _sefTrend  = new LineSeries { Title = "SEF95", Color = OxyColor.FromRgb(0xF5, 0xC2, 0x42), StrokeThickness = 1.4, LineStyle = LineStyle.Dash };
 
+        _dsaSeries = new HeatMapSeries
+        {
+            X0 = 0, X1 = 1, Y0 = 1, Y1 = DSA_BINS,
+            Interpolate = true,
+            RenderMethod = HeatMapRenderMethod.Bitmap,
+            Data = new double[1, DSA_BINS],
+        };
+
         EegModel = BuildEegModel();
         TrendModel = BuildTrendModel();
+        DsaModel = BuildDsaModel();
 
         RefreshPorts();
         WireSource(_serial);
         WireSource(_simulator);
         WireSource(_playback);
         _playback.PlaybackCompleted += () => RunOnUI(OnPlaybackCompleted);
+        _playback.ProgressChanged += p => RunOnUI(() => OnPlaybackProgress(p));
+        _playback.Seeked += (pkts, idx) => RunOnUI(() => RebuildFromHistory(pkts, idx));
 
         // 调试/演示辅助：设置环境变量 NSM_AUTOCONNECT=1 时自动连接模拟器
         if (Environment.GetEnvironmentVariable("NSM_AUTOCONNECT") == "1")
@@ -67,6 +85,19 @@ public sealed partial class MainViewModel : ObservableObject
     // ─────────────────────────── 图表 ───────────────────────────
     public PlotModel EegModel { get; }
     public PlotModel TrendModel { get; }
+    public PlotModel DsaModel { get; }
+
+    /// <summary>当前 EEG 滚动缓冲的样本（供成分分离弹窗读取）。</summary>
+    public double[] GetEegSamples()
+    {
+        var pts = _eegSeries.Points;
+        var s = new double[pts.Count];
+        for (int i = 0; i < pts.Count; i++) s[i] = pts[i].Y;
+        return s;
+    }
+
+    /// <summary>当前采样率（Hz），未知时回退到 100。</summary>
+    public int CurrentSampleRate => SampleRate > 0 ? SampleRate : 100;
 
     private PlotModel BuildEegModel()
     {
@@ -113,6 +144,43 @@ public sealed partial class MainViewModel : ObservableObject
         return m;
     }
 
+    private PlotModel BuildDsaModel()
+    {
+        var m = new PlotModel
+        {
+            PlotMargins = new OxyThickness(34, 4, 4, 22),
+            Padding = new OxyThickness(0),
+            Background = OxyColors.Transparent,
+            TextColor = OxyColor.FromRgb(0x3D, 0x5A, 0x7A),
+        };
+        // 颜色轴：0-255 强度 → 频谱配色（蓝→青→绿→黄→红）
+        m.Axes.Add(new LinearColorAxis
+        {
+            Position = AxisPosition.Right,
+            Palette = OxyPalettes.Jet(256),
+            Minimum = 0, Maximum = 255,
+            IsAxisVisible = false,
+            LowColor = OxyColors.Transparent,
+        });
+        // Y 轴：频率 1-44 Hz
+        m.Axes.Add(new LinearAxis
+        {
+            Position = AxisPosition.Left, Minimum = 1, Maximum = DSA_BINS,
+            Title = "Hz", FontSize = 10, TitleFontSize = 10,
+            MajorStep = 10, MinorStep = 5,
+            TextColor = OxyColor.FromRgb(0x3D, 0x5A, 0x7A),
+            TicklineColor = OxyColor.FromRgb(0x18, 0x2C, 0x46),
+        });
+        // X 轴：时间列（隐藏刻度，仅作滚动）
+        m.Axes.Add(new LinearAxis
+        {
+            Position = AxisPosition.Bottom, Minimum = 0, Maximum = DSA_COLS,
+            IsAxisVisible = false,
+        });
+        m.Series.Add(_dsaSeries);
+        return m;
+    }
+
     // ─────────────────────────── 连接控制 ───────────────────────────
     public record SourceOption(SourceMode Mode, string Name)
     {
@@ -137,10 +205,48 @@ public sealed partial class MainViewModel : ObservableObject
     [ObservableProperty] private string _currentTime = DateTime.Now.ToString("HH:mm:ss");
     [ObservableProperty] private string? _playbackFile;
 
+    // ── 回放进度与倍率 ──
+    [ObservableProperty] private double _playbackPosition;
+    [ObservableProperty] private double _playbackLength;
+    [ObservableProperty] private string _playbackTimeDisplay = "00:00 / 00:00";
+    [ObservableProperty] private double _playbackSpeed = 1.0;
+    private bool _suppressSeek;
+
+    public record SpeedOption(double Value, string Name)
+    {
+        public override string ToString() => Name;
+    }
+    public IReadOnlyList<SpeedOption> PlaybackSpeeds { get; } = new[]
+    {
+        new SpeedOption(0.5, "0.5×"), new SpeedOption(1, "1×"), new SpeedOption(2, "2×"),
+        new SpeedOption(4, "4×"), new SpeedOption(8, "8×"), new SpeedOption(16, "16×"), new SpeedOption(32, "32×"),
+    };
+
     public bool IsSerialMode => SelectedSourceMode == SourceMode.Serial;
     public bool IsPlaybackMode => SelectedSourceMode == SourceMode.Playback;
     public string PlaybackFileDisplay =>
         string.IsNullOrEmpty(PlaybackFile) ? "（未选择文件）" : Path.GetFileName(PlaybackFile);
+
+    partial void OnPlaybackPositionChanged(double value)
+    {
+        if (_suppressSeek) return;                       // 来自回放进度的程序化更新，不触发跳转
+        if (SelectedSourceMode == SourceMode.Playback && IsConnected)
+            _playback.SeekToIndex((int)Math.Round(value));
+    }
+
+    partial void OnPlaybackSpeedChanged(double value) => _playback.Speed = value;
+
+    private void OnPlaybackProgress(PlaybackProgress p)
+    {
+        _suppressSeek = true;
+        PlaybackLength = Math.Max(1, p.Total - 1);
+        PlaybackPosition = p.Index;
+        _suppressSeek = false;
+        PlaybackTimeDisplay = $"{FormatClock(p.Elapsed)} / {FormatClock(p.Duration)}";
+    }
+
+    private static string FormatClock(TimeSpan t) =>
+        t.TotalHours >= 1 ? $"{(int)t.TotalHours}:{t.Minutes:00}:{t.Seconds:00}" : $"{t.Minutes:00}:{t.Seconds:00}";
 
     partial void OnSelectedSourceModeChanged(SourceMode value)
     {
@@ -191,6 +297,16 @@ public sealed partial class MainViewModel : ObservableObject
             SourceMode.Playback => _playback,
             _ => _simulator,
         };
+
+        if (SelectedSourceMode == SourceMode.Playback)
+        {
+            _playback.Speed = PlaybackSpeed;
+            _suppressSeek = true;
+            PlaybackPosition = 0;
+            PlaybackLength = 1;
+            _suppressSeek = false;
+            PlaybackTimeDisplay = "00:00 / 00:00";
+        }
 
         bool ok = SelectedSourceMode switch
         {
@@ -293,7 +409,7 @@ public sealed partial class MainViewModel : ObservableObject
             DateTime.Now.ToString("HH:mm:ss"),
             label,
             double.IsNaN(CsiValue) ? null : (int)CsiValue,
-            IsManual: true));
+            isManual: true));
         while (Events.Count > 50) Events.RemoveAt(Events.Count - 1);
         _manualEventCounter++;
         AnnotationNote = "";
@@ -330,6 +446,13 @@ public sealed partial class MainViewModel : ObservableObject
     [ObservableProperty] private string _alphaDeltaRatioDisplay = "--";
     [ObservableProperty] private string _alphaBetaRatioDisplay = "--";
 
+    // 各分波功率占比（%），由 dB 还原为线性功率后归一
+    [ObservableProperty] private double _deltaPct;
+    [ObservableProperty] private double _thetaPct;
+    [ObservableProperty] private double _alphaPct;
+    [ObservableProperty] private double _betaPct;
+    [ObservableProperty] private double _gammaPct;
+
     [ObservableProperty] private string _blackImpedanceDisplay = "--";
     [ObservableProperty] private string _whiteImpedanceDisplay = "--";
     [ObservableProperty] private bool _hasElectrodeWarning;
@@ -351,6 +474,7 @@ public sealed partial class MainViewModel : ObservableObject
     {
         SampleRate = _source.SampleRate;
         if (!HasData) HasData = true;
+        if (!_firstPacketSeen) { _firstPacketSeen = true; _firstPacketTs = pkt.LocalTimestamp; }
 
         if (IsRecording)
         {
@@ -402,6 +526,22 @@ public sealed partial class MainViewModel : ObservableObject
         AlphaDeltaRatioDisplay = alphaDeltaRatio.ToString("0.00");
         AlphaBetaRatioDisplay  = alphaBetaRatio.ToString("0.00");
 
+        // 各分波占比：dB → 线性功率后归一化（含 γ）
+        double linDelta = Math.Pow(10, pkt.DeltaPowerDb / 10.0);
+        double linTheta = Math.Pow(10, pkt.ThetaPowerDb / 10.0);
+        double linAlpha = Math.Pow(10, pkt.AlphaPowerDb / 10.0);
+        double linBeta  = Math.Pow(10, pkt.BetaPowerDb / 10.0);
+        double linGamma = Math.Pow(10, pkt.GammaPowerDb / 10.0);
+        double linSum = linDelta + linTheta + linAlpha + linBeta + linGamma;
+        if (linSum > 0)
+        {
+            DeltaPct = 100 * linDelta / linSum;
+            ThetaPct = 100 * linTheta / linSum;
+            AlphaPct = 100 * linAlpha / linSum;
+            BetaPct  = 100 * linBeta  / linSum;
+            GammaPct = 100 * linGamma / linSum;
+        }
+
         // 电极阻抗
         BlackImpedanceDisplay = pkt.BlackImpedance >= 15 ? "过高" : pkt.BlackImpedance.ToString();
         WhiteImpedanceDisplay = pkt.WhiteImpedance >= 15 ? "过高" : pkt.WhiteImpedance.ToString();
@@ -417,17 +557,43 @@ public sealed partial class MainViewModel : ObservableObject
         }
         else { HasElectrodeWarning = false; ElectrodeWarning = ""; }
 
-        // 临床事件
-        if (pkt.EventNumber > 0)
-        {
-            Events.Insert(0, new NsmEventVm(
-                pkt.LocalTimestamp.ToString("HH:mm:ss"),
-                $"#{pkt.EventNumber} {EventLabel(pkt.EventType)}",
-                pkt.CSIValid ? pkt.CSI : null));
-            while (Events.Count > 50) Events.RemoveAt(Events.Count - 1);
-        }
+        // 临床事件（按事件编号合并：持续中的事件只显示一条，并实时累加持续时长）
+        HandleEvent(pkt);
 
         UpdateCharts(pkt);
+    }
+
+    // 当前正在持续的设备事件，用于消息合并
+    private int _currentEventNumber;
+    private DateTime _currentEventStart;
+    private NsmEventVm? _currentEvent;
+
+    private void HandleEvent(NSMDataPacket pkt)
+    {
+        if (pkt.EventNumber <= 0)
+        {
+            _currentEventNumber = 0;     // 事件结束
+            _currentEvent = null;
+            return;
+        }
+
+        if (pkt.EventNumber != _currentEventNumber)
+        {
+            // 新事件：插入一条，记录起点
+            _currentEventNumber = pkt.EventNumber;
+            _currentEventStart = pkt.LocalTimestamp;
+            _currentEvent = new NsmEventVm(
+                pkt.LocalTimestamp.ToString("HH:mm:ss"),
+                $"#{pkt.EventNumber} {EventLabel(pkt.EventType)}",
+                pkt.CSIValid ? pkt.CSI : null);
+            Events.Insert(0, _currentEvent);
+            while (Events.Count > 50) Events.RemoveAt(Events.Count - 1);
+        }
+        else if (_currentEvent != null)
+        {
+            // 同一事件持续中：只更新持续时长，不新增条目
+            _currentEvent.DurationSec = (int)Math.Round((pkt.LocalTimestamp - _currentEventStart).TotalSeconds);
+        }
     }
 
     private void UpdateCharts(NSMDataPacket pkt)
@@ -447,18 +613,125 @@ public sealed partial class MainViewModel : ObservableObject
         }
         EegModel.InvalidatePlot(true);
 
-        // 趋势
-        double tSec = (DateTime.Now - _trendStart).TotalSeconds;
+        // 趋势（以录制时间轴为基准，滚动窗口保留近 TREND_WINDOW_SEC 秒）
+        double tSec = (pkt.LocalTimestamp - _firstPacketTs).TotalSeconds;
         if (pkt.CSIValid && pkt.CSI <= 99) _csiTrend.Points.Add(new DataPoint(tSec, pkt.CSI));
         if (pkt.NOXValid && pkt.NOX <= 99) _noxTrend.Points.Add(new DataPoint(tSec, pkt.NOX));
         _sefTrend.Points.Add(new DataPoint(tSec, pkt.SEF95));
+        TrimTrend(tSec - TREND_WINDOW_SEC);
+        SetTrendAxis(tSec);
+        TrendModel.InvalidatePlot(true);
 
-        var bx = TrendModel.Axes[1];
-        if (tSec > TREND_WINDOW_SEC)
+        UpdateDsa(pkt);
+    }
+
+    private void UpdateDsa(NSMDataPacket pkt)
+    {
+        if (pkt.Dsa.Length != DSA_BINS) return;   // 紧凑记录格式无频谱数据
+        _dsaColumns.Add(pkt.Dsa);
+        while (_dsaColumns.Count > DSA_COLS) _dsaColumns.RemoveAt(0);
+        RefreshDsa();
+    }
+
+    /// <summary>由 _dsaColumns 重建热力图数据并刷新。</summary>
+    private void RefreshDsa()
+    {
+        int cols = _dsaColumns.Count;
+        var data = new double[Math.Max(1, cols), DSA_BINS];
+        for (int x = 0; x < cols; x++)
         {
-            bx.Minimum = tSec - TREND_WINDOW_SEC;
-            bx.Maximum = tSec;
+            var col = _dsaColumns[x];
+            for (int y = 0; y < DSA_BINS; y++) data[x, y] = col[y];
         }
+        _dsaSeries.Data = data;
+        _dsaSeries.X0 = 0;
+        _dsaSeries.X1 = Math.Max(1, cols - 1);
+        DsaModel.Axes[2].Minimum = 0;
+        DsaModel.Axes[2].Maximum = Math.Max(1, cols - 1);
+        DsaModel.InvalidatePlot(true);
+    }
+
+    private void TrimTrend(double minX)
+    {
+        TrimBefore(_csiTrend, minX);
+        TrimBefore(_noxTrend, minX);
+        TrimBefore(_sefTrend, minX);
+    }
+
+    private static void TrimBefore(LineSeries s, double minX)
+    {
+        int n = 0;
+        while (n < s.Points.Count && s.Points[n].X < minX) n++;
+        if (n > 0) s.Points.RemoveRange(0, n);
+    }
+
+    private void SetTrendAxis(double tSec)
+    {
+        var bx = TrendModel.Axes[1];
+        if (tSec > TREND_WINDOW_SEC) { bx.Minimum = tSec - TREND_WINDOW_SEC; bx.Maximum = tSec; }
+        else { bx.Minimum = 0; bx.Maximum = TREND_WINDOW_SEC; }
+    }
+
+    /// <summary>
+    /// 拖动进度后从历史帧重建累积图表：填充 [0, index) 的趋势 / DSA / EEG / 事件，
+    /// 而非清空——随后回放循环会正常推送第 index 帧继续累积。
+    /// </summary>
+    private void RebuildFromHistory(IReadOnlyList<NSMDataPacket> packets, int index)
+    {
+        _eegSeries.Points.Clear();
+        _csiTrend.Points.Clear();
+        _noxTrend.Points.Clear();
+        _sefTrend.Points.Clear();
+        _dsaColumns.Clear();
+        Events.Clear();
+        _currentEventNumber = 0;
+        _currentEvent = null;
+
+        if (packets.Count == 0 || index <= 0)
+        {
+            _firstPacketSeen = false;
+            _eegX = 0;
+            RefreshDsa();
+            EegModel.InvalidatePlot(true);
+            TrendModel.InvalidatePlot(true);
+            return;
+        }
+
+        _firstPacketSeen = true;
+        _firstPacketTs = packets[0].LocalTimestamp;
+        double tUpto = (packets[index - 1].LocalTimestamp - _firstPacketTs).TotalSeconds;
+        double minX = tUpto - TREND_WINDOW_SEC;
+
+        // 趋势（窗口内）+ 事件（全程合并）
+        for (int i = 0; i < index; i++)
+        {
+            var p = packets[i];
+            HandleEvent(p);
+            double t = (p.LocalTimestamp - _firstPacketTs).TotalSeconds;
+            if (t < minX) continue;
+            if (p.CSIValid && p.CSI <= 99) _csiTrend.Points.Add(new DataPoint(t, p.CSI));
+            if (p.NOXValid && p.NOX <= 99) _noxTrend.Points.Add(new DataPoint(t, p.NOX));
+            _sefTrend.Points.Add(new DataPoint(t, p.SEF95));
+        }
+        SetTrendAxis(tUpto);
+
+        // DSA（近 DSA_COLS 列）
+        for (int i = Math.Max(0, index - DSA_COLS); i < index; i++)
+            if (packets[i].Dsa.Length == DSA_BINS) _dsaColumns.Add(packets[i].Dsa);
+        RefreshDsa();
+
+        // EEG（近 EEG_WINDOW 个样本）
+        _eegX = 0;
+        for (int i = Math.Max(0, index - (EEG_WINDOW / EEG_SAMPLES_PER_PACKET) - 1); i < index; i++)
+            foreach (var s in packets[i].EEGSamplesUv) _eegSeries.Points.Add(new DataPoint(_eegX++, s));
+        while (_eegSeries.Points.Count > EEG_WINDOW) _eegSeries.Points.RemoveAt(0);
+        if (_eegSeries.Points.Count > 0)
+        {
+            EegModel.Axes[1].Minimum = _eegSeries.Points[0].X;
+            EegModel.Axes[1].Maximum = _eegSeries.Points[^1].X;
+        }
+
+        EegModel.InvalidatePlot(true);
         TrendModel.InvalidatePlot(true);
     }
 
@@ -468,11 +741,18 @@ public sealed partial class MainViewModel : ObservableObject
         _csiTrend.Points.Clear();
         _noxTrend.Points.Clear();
         _sefTrend.Points.Clear();
+        _dsaColumns.Clear();
+        _dsaSeries.Data = new double[1, DSA_BINS];
+        _dsaSeries.X0 = 0;
+        _dsaSeries.X1 = 1;
         _eegX = 0;
-        _trendStart = DateTime.Now;
+        _firstPacketSeen = false;
         Events.Clear();
+        _currentEventNumber = 0;
+        _currentEvent = null;
         EegModel.InvalidatePlot(true);
         TrendModel.InvalidatePlot(true);
+        DsaModel.InvalidatePlot(true);
     }
 
     public void TickClock() => CurrentTime = DateTime.Now.ToString("HH:mm:ss");
@@ -499,9 +779,31 @@ public sealed partial class MainViewModel : ObservableObject
     }
 }
 
-public sealed record NsmEventVm(string Time, string Label, int? Csi, bool IsManual = false)
+public sealed partial class NsmEventVm : ObservableObject
 {
+    public NsmEventVm(string time, string label, int? csi, bool isManual = false)
+    {
+        Time = time;
+        Label = label;
+        Csi = csi;
+        IsManual = isManual;
+    }
+
+    public string Time { get; }
+    public string Label { get; }
+    public int? Csi { get; }
+    public bool IsManual { get; }
+
+    /// <summary>事件持续秒数（合并显示）；0 表示瞬时事件。</summary>
+    [ObservableProperty] private int _durationSec;
+    partial void OnDurationSecChanged(int value) => OnPropertyChanged(nameof(DurationText));
+
     public string CsiText => Csi.HasValue ? $"CSI {Csi}" : "";
+    public string DurationText => DurationSec <= 0
+        ? ""
+        : DurationSec < 60 ? $"持续 {DurationSec}秒"
+        : $"持续 {DurationSec / 60}分{DurationSec % 60}秒";
+
     public Brush Accent => new SolidColorBrush(IsManual
         ? Color.FromRgb(0xF0, 0xA0, 0x20)   // 手动：琥珀色
         : Color.FromRgb(0x00, 0xC8, 0xFF)); // 设备：青色

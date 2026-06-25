@@ -18,6 +18,8 @@
             <SolidColorBrush x:Key="TextPrimaryBrush"   Color="{StaticResource TextPrimaryColor}"/>
             <SolidColorBrush x:Key="TextSecondaryBrush" Color="{StaticResource TextSecondaryColor}"/>
             <SolidColorBrush x:Key="TextMutedBrush"     Color="{StaticResource TextMutedColor}"/>
+            <!-- 小字标签：高对比度，替代偏暗的 TextMutedBrush -->
+            <SolidColorBrush x:Key="MiniLabelBrush"     Color="#AEC2DC"/>
             <SolidColorBrush x:Key="AccentCyanBrush"    Color="{StaticResource AccentCyanColor}"/>
             <SolidColorBrush x:Key="GreenOkBrush"       Color="{StaticResource GreenOkColor}"/>
             <SolidColorBrush x:Key="YellowWarnBrush"    Color="{StaticResource YellowWarnColor}"/>
@@ -129,8 +131,9 @@
             </Style>
 
             <Style TargetType="TextBlock" x:Key="MiniLabelStyle">
-                <Setter Property="Foreground" Value="{StaticResource TextMutedBrush}"/>
+                <Setter Property="Foreground" Value="{StaticResource MiniLabelBrush}"/>
                 <Setter Property="FontSize" Value="11"/>
+                <Setter Property="FontWeight" Value="SemiBold"/>
                 <Setter Property="HorizontalAlignment" Value="Center"/>
             </Style>
 

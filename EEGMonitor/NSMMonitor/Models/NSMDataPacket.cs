@@ -52,6 +52,12 @@ public record NSMDataPacket
     public int SEF95 { get; init; }    // 1-44 Hz
     public int EOG { get; init; }      // 0-100
 
+    // ── 密度谱阵列 (DSA) ──
+    /// <summary>密度谱阵列：44 个频段（1-44 Hz，每 1 Hz 一格）的功率强度，0-255。
+    /// 由设备直接给出（非上位机 FFT 计算），存于完整 355 字节帧偏移 132-175。
+    /// 紧凑 128 字节记录格式不含此字段，长度为 0。</summary>
+    public byte[] Dsa { get; init; } = Array.Empty<byte>();
+
     // ── 有效性 ──
     public bool CSIValid => CSI != 0xEE && CSI != 0xFF;
     public bool BSValid => BS != 0xFF;

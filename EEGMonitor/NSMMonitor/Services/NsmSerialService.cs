@@ -201,6 +201,11 @@ public sealed class NsmSerialService : INsmDataSource, IDisposable
         for (int i = 0; i < EEG_SAMPLES_PER_PACKET; i++)
             eegSamples[i] = (sbyte)buf[EEG_OFFSET + i];
 
+        // DSA：偏移 132 起 44 字节（无符号强度），电极报警/失效帧清零
+        var dsa = new byte[44];
+        if ((blockStatus & 0x82) == 0)
+            Array.Copy(buf, 132, dsa, 0, 44);
+
         return new NSMDataPacket
         {
             LocalTimestamp = DateTime.Now,
@@ -227,6 +232,7 @@ public sealed class NsmSerialService : INsmDataSource, IDisposable
             GammaPowerDb = (sbyte)buf[130],
             SEF95 = buf[176],
             EOG   = buf[131],
+            Dsa = dsa,
         };
     }
 

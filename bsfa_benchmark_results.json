@@ -1,0 +1,69 @@
+{
+  "summary": {
+    "n_files": 3,
+    "correlation_mean": 0.6800666666666667,
+    "correlation_std": 0.08256562373180636,
+    "mae_mean": 28.856666666666666,
+    "mae_std": 7.1674139145316715,
+    "concordance_mean": 0.127,
+    "reflection_rate_mean": 0.5328005328005329,
+    "inference_latency_ms": 0.003090466605499387,
+    "state_distribution": {
+      "AWAKE": 344,
+      "SEDATED": 2543,
+      "SURGICAL_ANESTHESIA": 113
+    }
+  },
+  "per_file": [
+    {
+      "filename": "0001.vital",
+      "n_epochs": 1001,
+      "duration_seconds": 11542.1015625,
+      "state_distribution": {
+        "AWAKE": 77,
+        "SEDATED": 923
+      },
+      "reflection_triggers": 0,
+      "reflection_rate": 0.0,
+      "avg_inference_ms": 0.0031247001606971025,
+      "bis_correlation": 0.7299,
+      "mae": 21.59,
+      "concordance": 0.3,
+      "n_comparable_epochs": 1000
+    },
+    {
+      "filename": "0002.vital",
+      "n_epochs": 1001,
+      "duration_seconds": 15740.7734375,
+      "state_distribution": {
+        "AWAKE": 30,
+        "SEDATED": 893,
+        "SURGICAL_ANESTHESIA": 77
+      },
+      "reflection_triggers": 8,
+      "reflection_rate": 0.7992007992007992,
+      "avg_inference_ms": 0.003109600627794862,
+      "bis_correlation": 0.7466,
+      "mae": 26.37,
+      "concordance": 0.081,
+      "n_comparable_epochs": 1000
+    },
+    {
+      "filename": "0003.vital",
+      "n_epochs": 1001,
+      "duration_seconds": 4394.1796875,
+      "state_distribution": {
+        "AWAKE": 237,
+        "SEDATED": 727,
+        "SURGICAL_ANESTHESIA": 36
+      },
+      "reflection_triggers": 8,
+      "reflection_rate": 0.7992007992007992,
+      "avg_inference_ms": 0.003037099028006196,
+      "bis_correlation": 0.5637,
+      "mae": 38.61,
+      "concordance": 0.0,
+      "n_comparable_epochs": 1000
+    }
+  ]
+}

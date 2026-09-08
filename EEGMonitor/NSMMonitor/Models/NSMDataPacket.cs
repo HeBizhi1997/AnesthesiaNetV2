@@ -58,6 +58,17 @@ public record NSMDataPacket
     /// 紧凑 128 字节记录格式不含此字段，长度为 0。</summary>
     public byte[] Dsa { get; init; } = Array.Empty<byte>();
 
+    // ── 脉搏波（录制时附加，回放时重建 SpO₂/脉搏/SPI）──
+    /// <summary>本包时段的红外脉搏波交流分量（自上一包累积，约 125 个/包），存前已减去 <see cref="IrDc"/>。
+    /// 无脉搏仪或老录制文件时为 null。回放用 AC+DC 还原绝对值喂处理器，与实时同一条计算链。</summary>
+    public short[]? PulseWaveIr { get; init; }
+    /// <summary>对应红光通道交流分量（减去 <see cref="RedDc"/>）。SpO₂ 需 IR+RED 两路才能算。</summary>
+    public short[]? PulseWaveRed { get; init; }
+    /// <summary>IR 通道本包直流基线（均值）。比值 R = (AC_red/DC_red)/(AC_ir/DC_ir) 需要它。</summary>
+    public int IrDc { get; init; }
+    /// <summary>RED 通道本包直流基线（均值）。</summary>
+    public int RedDc { get; init; }
+
     // ── 有效性 ──
     public bool CSIValid => CSI != 0xEE && CSI != 0xFF;
     public bool BSValid => BS != 0xFF;

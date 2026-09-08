@@ -2,6 +2,7 @@
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:conv="clr-namespace:NSMMonitor.Converters"
+             xmlns:oxy="http://oxyplot.org/wpf"
              ShutdownMode="OnMainWindowClose">
     <Application.Resources>
         <ResourceDictionary>
@@ -88,13 +89,37 @@
             <SolidColorBrush x:Key="BetaTextBrush"  Color="#FBBF24"/>
             <SolidColorBrush x:Key="GammaTextBrush" Color="#FB7185"/>
 
+            <!-- ═══════════ 生命体征带配色 ═══════════ -->
+            <!-- 三联指数：CSI 紫 / SPI 橙 / 融合 靛青 —— 三色可区分且都不与绿黄红判读色冲突 -->
+            <SolidColorBrush x:Key="CsiAccentBrush"    Color="#A78BFA"/>
+            <SolidColorBrush x:Key="SpiAccentBrush"    Color="#FB923C"/>
+            <SolidColorBrush x:Key="FusionAccentBrush" Color="#818CF8"/>
+            <SolidColorBrush x:Key="NoxAccentBrush"    Color="#2DD4BF"/>
+            <SolidColorBrush x:Key="Spo2AccentBrush"   Color="#38BDF8"/>
+            <SolidColorBrush x:Key="PulseAccentBrush"  Color="#FB7185"/>
+
+            <!-- 区间条：轨道 / 目标窗高亮 / 当前值 -->
+            <SolidColorBrush x:Key="RangeTrackBrush"  Color="#111C30"/>
+            <SolidColorBrush x:Key="RangeTargetBrush" Color="#1E3A34"/>
+
+            <!-- 生命体征带背景（比卡片略深，形成一条独立的带） -->
+            <LinearGradientBrush x:Key="VitalBarBrush" StartPoint="0,0" EndPoint="0,1">
+                <GradientStop Color="#141E36" Offset="0"/>
+                <GradientStop Color="#0E1729" Offset="1"/>
+            </LinearGradientBrush>
+
             <!-- ═══════════ 转换器 ═══════════ -->
             <conv:CsiColorConverter   x:Key="CsiColor"/>
             <conv:NoxColorConverter   x:Key="NoxColor"/>
             <conv:SqiColorConverter   x:Key="SqiColor"/>
+            <conv:SpiColorConverter   x:Key="SpiColor"/>
+            <conv:Spo2ColorConverter  x:Key="Spo2Color"/>
+            <conv:PrColorConverter    x:Key="PrColor"/>
+            <conv:RangeBarConverter   x:Key="RangeBar"/>
             <conv:BoolToVisConverter  x:Key="BoolToVis"/>
             <conv:InverseBoolConverter x:Key="InverseBool"/>
             <conv:DbToGridLengthConverter x:Key="DbBar"/>
+            <conv:TrackerTextConverter x:Key="TrackerText"/>
 
             <!-- ═══════════ 排版 ═══════════ -->
             <Style TargetType="TextBlock">
@@ -135,6 +160,80 @@
                 <Setter Property="FontSize" Value="11"/>
                 <Setter Property="FontWeight" Value="SemiBold"/>
                 <Setter Property="HorizontalAlignment" Value="Center"/>
+            </Style>
+
+            <!-- ═══════════ 生命体征带 ═══════════ -->
+            <!-- 指标名（CSI / SpO₂ …）：小号全大写，靠色彩区分指标 -->
+            <Style TargetType="TextBlock" x:Key="VitalNameStyle">
+                <Setter Property="FontSize" Value="13"/>
+                <Setter Property="FontWeight" Value="Bold"/>
+                <Setter Property="HorizontalAlignment" Value="Center"/>
+            </Style>
+
+            <!-- 中文副标题 -->
+            <Style TargetType="TextBlock" x:Key="VitalSubStyle">
+                <Setter Property="Foreground" Value="{StaticResource MiniLabelBrush}"/>
+                <Setter Property="FontSize" Value="10"/>
+                <Setter Property="HorizontalAlignment" Value="Center"/>
+                <Setter Property="Margin" Value="0,1,0,0"/>
+            </Style>
+
+            <!-- 大号读数：手术室内需要远距离可读，故字号远大于卡片内数值 -->
+            <Style TargetType="TextBlock" x:Key="VitalValueStyle">
+                <Setter Property="FontSize" Value="52"/>
+                <Setter Property="FontWeight" Value="Bold"/>
+                <Setter Property="HorizontalAlignment" Value="Center"/>
+                <Setter Property="VerticalAlignment" Value="Center"/>
+                <Setter Property="LineHeight" Value="56"/>
+                <Setter Property="LineStackingStrategy" Value="BlockLineHeight"/>
+            </Style>
+
+            <Style TargetType="TextBlock" x:Key="VitalUnitStyle">
+                <Setter Property="Foreground" Value="{StaticResource MiniLabelBrush}"/>
+                <Setter Property="FontSize" Value="13"/>
+                <Setter Property="VerticalAlignment" Value="Bottom"/>
+                <Setter Property="Margin" Value="3,0,0,9"/>
+            </Style>
+
+            <!-- 状态词（适宜区间 / 镇痛不足 …）：与读数同色，形成一组 -->
+            <Style TargetType="TextBlock" x:Key="VitalZoneStyle">
+                <Setter Property="FontSize" Value="12"/>
+                <Setter Property="FontWeight" Value="SemiBold"/>
+                <Setter Property="HorizontalAlignment" Value="Center"/>
+            </Style>
+
+            <!-- ═══════════ 右列紧凑指标瓦片 ═══════════ -->
+            <Style TargetType="Border" x:Key="MetricTileStyle">
+                <Setter Property="CornerRadius" Value="9"/>
+                <Setter Property="Background" Value="#141E33"/>
+                <Setter Property="BorderBrush" Value="#243450"/>
+                <Setter Property="BorderThickness" Value="1"/>
+                <Setter Property="Margin" Value="3"/>
+                <Setter Property="Padding" Value="8,7"/>
+            </Style>
+
+            <Style TargetType="TextBlock" x:Key="TileValueStyle">
+                <Setter Property="FontSize" Value="21"/>
+                <Setter Property="FontWeight" Value="Bold"/>
+                <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}"/>
+                <Setter Property="HorizontalAlignment" Value="Center"/>
+            </Style>
+
+            <Style TargetType="TextBlock" x:Key="TileLabelStyle">
+                <Setter Property="Foreground" Value="{StaticResource MiniLabelBrush}"/>
+                <Setter Property="FontSize" Value="10"/>
+                <Setter Property="HorizontalAlignment" Value="Center"/>
+                <Setter Property="Margin" Value="0,2,0,0"/>
+            </Style>
+
+            <!-- 提示芯片（未标定 / 未连接 …） -->
+            <Style TargetType="Border" x:Key="ChipStyle">
+                <Setter Property="CornerRadius" Value="9"/>
+                <Setter Property="Background" Value="#2A2113"/>
+                <Setter Property="BorderBrush" Value="#5A4520"/>
+                <Setter Property="BorderThickness" Value="1"/>
+                <Setter Property="Padding" Value="7,2"/>
+                <Setter Property="VerticalAlignment" Value="Center"/>
             </Style>
 
             <!-- 顶部状态图标芯片 -->
@@ -188,11 +287,11 @@
                 <Setter Property="Foreground" Value="#34D399"/>
             </Style>
 
-            <!-- 下拉项：白底黑字 -->
+            <!-- 下拉项：暗底亮字，高对比（悬停/选中用明显色块区分，避免底色与字色接近） -->
             <Style TargetType="ComboBoxItem" x:Key="DarkComboItemStyle">
-                <Setter Property="Background" Value="White"/>
-                <Setter Property="Foreground" Value="Black"/>
-                <Setter Property="Padding" Value="8,5"/>
+                <Setter Property="Background" Value="Transparent"/>
+                <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}"/>
+                <Setter Property="Padding" Value="10,6"/>
                 <Setter Property="FontFamily" Value="Microsoft YaHei, Segoe UI"/>
                 <Setter Property="FontSize" Value="13"/>
                 <Setter Property="Template">
@@ -200,14 +299,16 @@
                         <ControlTemplate TargetType="ComboBoxItem">
                             <Border x:Name="Bd" Background="{TemplateBinding Background}"
                                     Padding="{TemplateBinding Padding}" SnapsToDevicePixels="True">
-                                <ContentPresenter VerticalAlignment="Center"/>
+                                <ContentPresenter x:Name="Cp" VerticalAlignment="Center"
+                                                  TextElement.Foreground="{TemplateBinding Foreground}"/>
                             </Border>
                             <ControlTemplate.Triggers>
                                 <Trigger Property="IsMouseOver" Value="True">
-                                    <Setter TargetName="Bd" Property="Background" Value="#D6EBFF"/>
+                                    <Setter TargetName="Bd" Property="Background" Value="#274B74"/>
                                 </Trigger>
                                 <Trigger Property="IsSelected" Value="True">
-                                    <Setter TargetName="Bd" Property="Background" Value="#BBD9FF"/>
+                                    <Setter TargetName="Bd" Property="Background" Value="#2FE6D6"/>
+                                    <Setter TargetName="Cp" Property="TextElement.Foreground" Value="#06202A"/>
                                 </Trigger>
                             </ControlTemplate.Triggers>
                         </ControlTemplate>
@@ -260,10 +361,13 @@
                                       Data="M 0 0 L 4 4 L 8 0 Z"/>
                                 <Popup x:Name="Popup" Placement="Bottom" Focusable="False" PopupAnimation="Slide"
                                        IsOpen="{TemplateBinding IsDropDownOpen}" AllowsTransparency="True">
-                                    <Border Background="White" BorderBrush="#2A3A5A" BorderThickness="1" CornerRadius="0"
+                                    <Border Background="#16233C" BorderBrush="#3A5074" BorderThickness="1" CornerRadius="6" Margin="0,3,0,0"
                                             MinWidth="{Binding ActualWidth, ElementName=MainBorder}"
                                             MaxHeight="{TemplateBinding MaxDropDownHeight}">
-                                        <ScrollViewer SnapsToDevicePixels="True">
+                                        <Border.Effect>
+                                            <DropShadowEffect Color="#05080F" BlurRadius="14" ShadowDepth="3" Opacity="0.6" Direction="270"/>
+                                        </Border.Effect>
+                                        <ScrollViewer SnapsToDevicePixels="True" Margin="3">
                                             <ItemsPresenter KeyboardNavigation.DirectionalNavigation="Contained"/>
                                         </ScrollViewer>
                                     </Border>
@@ -281,6 +385,59 @@
                     </Setter.Value>
                 </Setter>
             </Style>
+
+            <!-- ═══════════ Tooltip 暗色（WPF + OxyPlot 悬停框）═══════════ -->
+            <!-- 全局 WPF ToolTip：覆盖按钮/芯片/电极状态等所有提示 -->
+            <Style TargetType="ToolTip">
+                <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}"/>
+                <Setter Property="Background" Value="#14203A"/>
+                <Setter Property="BorderBrush" Value="#2A3A5A"/>
+                <Setter Property="BorderThickness" Value="1"/>
+                <Setter Property="FontFamily" Value="Microsoft YaHei, Segoe UI"/>
+                <Setter Property="FontSize" Value="12"/>
+                <Setter Property="MaxWidth" Value="320"/>
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="ToolTip">
+                            <Border Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
+                                    BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="6" Padding="9,6">
+                                <ContentPresenter/>
+                            </Border>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
+
+            <!-- OxyPlot 悬停框：暗底白字，替代刺眼的默认黄底 -->
+            <ControlTemplate x:Key="DarkTrackerTemplate">
+                <oxy:TrackerControl Position="{Binding Position}" LineExtents="{Binding PlotModel.PlotArea}"
+                                    Background="#F214203A" BorderBrush="{StaticResource AccentCyanBrush}" BorderThickness="1"
+                                    LineStroke="#802FE6D6">
+                    <oxy:TrackerControl.Content>
+                        <TextBlock Text="{Binding}" Foreground="{StaticResource TextPrimaryBrush}"
+                                   FontFamily="Consolas, Microsoft YaHei" FontSize="12" Margin="8,5"/>
+                    </oxy:TrackerControl.Content>
+                </oxy:TrackerControl>
+            </ControlTemplate>
+
+            <!-- 让所有 PlotView 默认套用暗色悬停框，省得逐个设置 -->
+            <Style TargetType="oxy:PlotView">
+                <Setter Property="DefaultTrackerTemplate" Value="{StaticResource DarkTrackerTemplate}"/>
+            </Style>
+
+            <!-- 时间轴悬停框：横轴为手术计时秒的图（趋势/报告各图）专用 ——
+                 表头显示「时间 mm:ss」，其下一次性列出该时刻所有指标值（各成分/CSI·SPI·NOX…） -->
+            <ControlTemplate x:Key="TimeTrackerTemplate">
+                <oxy:TrackerControl Position="{Binding Position}" LineExtents="{Binding PlotModel.PlotArea}"
+                                    Background="#F214203A" BorderBrush="{StaticResource AccentCyanBrush}" BorderThickness="1"
+                                    LineStroke="#802FE6D6">
+                    <oxy:TrackerControl.Content>
+                        <TextBlock Text="{Binding Converter={StaticResource TrackerText}}"
+                                   Foreground="{StaticResource TextPrimaryBrush}"
+                                   FontFamily="Consolas, Microsoft YaHei" FontSize="12" Margin="9,6"/>
+                    </oxy:TrackerControl.Content>
+                </oxy:TrackerControl>
+            </ControlTemplate>
 
         </ResourceDictionary>
     </Application.Resources>

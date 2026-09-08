@@ -1,0 +1,129 @@
+<Window x:Class="NSMMonitor.Views.SessionReportWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:oxy="http://oxyplot.org/wpf"
+        Title="整场麻醉回顾报告" Height="940" Width="1240"
+        WindowStartupLocation="CenterOwner"
+        Background="{StaticResource WindowBgBrush}"
+        FontFamily="Microsoft YaHei, Segoe UI">
+    <DockPanel>
+        <!-- 头部 -->
+        <Border DockPanel.Dock="Top" Height="60" Background="#0C1424" BorderBrush="#1E2A44" BorderThickness="0,0,0,1">
+            <Grid Margin="20,0">
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                    <TextBlock Text="整场麻醉回顾报告" FontSize="18" FontWeight="Bold" Foreground="{StaticResource TitleBrush}" VerticalAlignment="Center"/>
+                    <TextBlock Text="Anesthesia Case Review" FontSize="11" Foreground="{StaticResource MiniLabelBrush}" VerticalAlignment="Bottom" Margin="10,0,0,6"/>
+                </StackPanel>
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
+                    <TextBlock Text="{Binding HeaderInfo}" Foreground="{StaticResource TextSecondaryBrush}" FontSize="12" VerticalAlignment="Center" Margin="0,0,16,0"/>
+                    <Button Content="刷新" Style="{StaticResource ActionButtonStyle}" Padding="12,5" Click="Refresh_Click"/>
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="10">
+            <StackPanel>
+                <TextBlock x:Name="EmptyHint" Text="暂无数据 · 连接设备或加载回放后再查看报告"
+                           Foreground="{StaticResource TextSecondaryBrush}" FontSize="15"
+                           HorizontalAlignment="Center" Margin="0,60" Visibility="Collapsed"/>
+
+                <!-- ═══ 关键指标概览 KPI ═══ -->
+                <Border Style="{StaticResource CardStyle}">
+                    <StackPanel Margin="14,11">
+                        <TextBlock Text="关键指标概览" FontSize="14" FontWeight="Bold" Foreground="{StaticResource AccentCyanBrush}" Margin="2,0,0,9"/>
+                        <UniformGrid x:Name="KpiGrid" Columns="4" Rows="2"/>
+                    </StackPanel>
+                </Border>
+
+                <!-- ═══ 共享时间轴的分区（自上而下按临床优先级）═══ -->
+                <!-- 1. 麻醉深度 CSI + 靶区带 -->
+                <Border Style="{StaticResource CardStyle}" Height="204">
+                    <Grid Margin="14,10">
+                        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="麻醉深度 CSI" FontSize="14" FontWeight="Bold" Foreground="{StaticResource CsiAccentBrush}"/>
+                            <TextBlock Text="绿带为适宜手术区间 40–60 · 竖线为临床事件（编号见下）" Style="{StaticResource CardTitleStyle}" Margin="8,0,0,0" VerticalAlignment="Center"/>
+                        </StackPanel>
+                        <!-- 事件编号↔名称对照：图上只标编号，全名在此读，避免图内文字拥挤 -->
+                        <TextBlock x:Name="EventLegend" Grid.Row="1" Margin="0,5,0,0" TextWrapping="Wrap"
+                                   FontSize="12" Foreground="{StaticResource MiniLabelBrush}"/>
+                        <oxy:PlotView Grid.Row="2" x:Name="CsiPlot" Background="Transparent" Margin="0,4,0,0"/>
+                    </Grid>
+                </Border>
+
+                <!-- 2. 爆发抑制 BSR -->
+                <Border Style="{StaticResource CardStyle}" Height="150">
+                    <Grid Margin="14,10">
+                        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="爆发抑制 BSR" FontSize="14" FontWeight="Bold" Foreground="#F472B6"/>
+                            <TextBlock Text="抑制比越高＝麻醉越深；持续抑制与术后谵妄相关" Style="{StaticResource CardTitleStyle}" Margin="8,0,0,0" VerticalAlignment="Center"/>
+                        </StackPanel>
+                        <oxy:PlotView Grid.Row="1" x:Name="BsrPlot" Background="Transparent" Margin="0,4,0,0"/>
+                    </Grid>
+                </Border>
+
+                <!-- 3. 频谱 DSA -->
+                <Border Style="{StaticResource CardStyle}" Height="180">
+                    <Grid Margin="14,10">
+                        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="频谱 DSA" FontSize="14" FontWeight="Bold" Foreground="{StaticResource AccentCyanBrush}"/>
+                            <TextBlock Text="1–44 Hz 密度谱阵列（与深度时间对齐）" Style="{StaticResource CardTitleStyle}" Margin="8,0,0,0" VerticalAlignment="Center"/>
+                        </StackPanel>
+                        <oxy:PlotView Grid.Row="1" x:Name="DsaPlot" Background="Transparent" Margin="0,4,0,0"/>
+                    </Grid>
+                </Border>
+
+                <!-- 4. 伤害感受 SPI / NOX -->
+                <Border Style="{StaticResource CardStyle}" Height="170">
+                    <Grid Margin="14,10">
+                        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="伤害感受 / 镇痛" FontSize="14" FontWeight="Bold" Foreground="{StaticResource SpiAccentBrush}"/>
+                            <TextBlock Text="SPI（绿带 20–50 适当） / NOX" Style="{StaticResource CardTitleStyle}" Margin="8,0,0,0" VerticalAlignment="Center"/>
+                        </StackPanel>
+                        <oxy:PlotView Grid.Row="1" x:Name="SpiPlot" Background="Transparent" Margin="0,4,0,0"/>
+                    </Grid>
+                </Border>
+
+                <!-- 5. 血氧 SpO₂ / 脉搏 -->
+                <Border Style="{StaticResource CardStyle}" Height="180">
+                    <Grid Margin="14,10">
+                        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="血氧 / 脉搏" FontSize="14" FontWeight="Bold" Foreground="{StaticResource Spo2AccentBrush}"/>
+                            <TextBlock Text="SpO₂（红带＜90 低氧） / 脉搏" Style="{StaticResource CardTitleStyle}" Margin="8,0,0,0" VerticalAlignment="Center"/>
+                        </StackPanel>
+                        <oxy:PlotView Grid.Row="1" x:Name="VitalPlot" Background="Transparent" Margin="0,4,0,0"/>
+                    </Grid>
+                </Border>
+
+                <!-- 6. 脑电成分随时间 -->
+                <Border Style="{StaticResource CardStyle}" Height="170">
+                    <Grid Margin="14,10">
+                        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="脑电成分随时间" FontSize="14" FontWeight="Bold" Foreground="{StaticResource AccentCyanBrush}"/>
+                            <TextBlock Text="δ/θ/α/β/γ 占比 100% 堆叠（看谱型迁移）" Style="{StaticResource CardTitleStyle}" Margin="8,0,0,0" VerticalAlignment="Center"/>
+                        </StackPanel>
+                        <oxy:PlotView Grid.Row="1" x:Name="BandPlot" Background="Transparent" Margin="0,4,0,0"/>
+                    </Grid>
+                </Border>
+
+                <!-- 7. 原始脑电包络（弱化，默认折叠）-->
+                <Border Style="{StaticResource CardStyle}">
+                    <Expander Margin="10,4" Foreground="{StaticResource TextSecondaryBrush}">
+                        <Expander.Header>
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="原始脑电包络" FontSize="13" FontWeight="Bold" Foreground="{StaticResource TextSecondaryBrush}"/>
+                                <TextBlock Text="整场压缩为 min/max 包络，细节请回放逐段查看" Style="{StaticResource CardTitleStyle}" FontSize="11" Margin="8,0,0,0" VerticalAlignment="Center"/>
+                            </StackPanel>
+                        </Expander.Header>
+                        <oxy:PlotView x:Name="EegPlot" Background="Transparent" Height="150" Margin="0,6,0,4"/>
+                    </Expander>
+                </Border>
+            </StackPanel>
+        </ScrollViewer>
+    </DockPanel>
+</Window>

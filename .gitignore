@@ -48,6 +48,9 @@ Thumbs.db
 [Bb]in/
 [Oo]bj/
 
+# 发布产物（自包含单文件约 70 MB，不入库；用 EEGMonitor/NSMMonitor/publish.ps1 重新生成）
+publish/
+
 # Visual Studio
 .vs/
 *.user

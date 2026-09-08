@@ -63,6 +63,10 @@ public sealed class NsmPlaybackService : INsmDataSource, IDisposable
         _seekRequest = Math.Clamp(index, 0, _packets.Count - 1);
     }
 
+    /// <summary>整场已解析的数据包。<see cref="Connect"/> 成功返回后即可用（同步读入），
+    /// 供报告预加载整场数据，不受回放/拖动进度影响。</summary>
+    public IReadOnlyList<NSMDataPacket> Packets => _packets;
+
     public NsmPlaybackService(ILogger<NsmPlaybackService> logger) => _logger = logger;
 
     public IEnumerable<string> GetAvailablePorts() => Array.Empty<string>();
@@ -81,10 +85,31 @@ public sealed class NsmPlaybackService : INsmDataSource, IDisposable
         _played = 0;
         _position = 0;
         _seekRequest = -1;
+
+        // 同步读入整个文件：让 Packets 在 Connect 返回后立即可用，
+        // 供上层一次性预加载整场（报告要"回放直接展示所有数据"，不受实时回放/拖动进度限制）。
+        try
+        {
+            _packets = IsBinaryRecordFile(_filePath)
+                ? ReadBinaryRecords(_filePath)
+                : ReadJsonLines(_filePath);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "读取回放文件失败");
+            StatusChanged?.Invoke("回放文件读取失败");
+            return false;
+        }
+        if (_packets.Count == 0)
+        {
+            StatusChanged?.Invoke("回放文件为空");
+            return false;
+        }
+
         _cts = new CancellationTokenSource();
         IsConnected = true;
         _task = Task.Run(() => ReplayLoop(_cts.Token));
-        _logger.LogInformation("开始回放 {File}", portName);
+        _logger.LogInformation("开始回放 {File}（{Count} 包）", portName, _packets.Count);
         StatusChanged?.Invoke($"开始回放：{Path.GetFileName(portName)}");
         return true;
     }
@@ -93,10 +118,6 @@ public sealed class NsmPlaybackService : INsmDataSource, IDisposable
     {
         try
         {
-            _packets = IsBinaryRecordFile(_filePath)
-                ? ReadBinaryRecords(_filePath)
-                : ReadJsonLines(_filePath);
-
             if (_packets.Count == 0)
             {
                 StatusChanged?.Invoke("回放文件为空");

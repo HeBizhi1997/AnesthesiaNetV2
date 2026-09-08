@@ -9,6 +9,36 @@
     <RootNamespace>NSMMonitor</RootNamespace>
     <AssemblyName>NSMMonitor</AssemblyName>
     <Platforms>AnyCPU;x64</Platforms>
+
+    <!-- 版本与产品信息（写进 exe 属性页，现场排障时能对上版本） -->
+    <Version>1.0.0</Version>
+    <Product>NSM 麻醉深度监护系统</Product>
+    <AssemblyTitle>NSM 麻醉深度监护系统</AssemblyTitle>
+    <Description>NSM 脑电监护仪 + AFE4490 指夹血氧 双路采集与显示</Description>
+    <Company>天津项目</Company>
+    <Copyright>Copyright © 2026</Copyright>
+  </PropertyGroup>
+
+  <!--
+    独立发布参数。仅在 dotnet publish 时生效，不影响日常 dotnet build。
+    关键取舍：
+      SelfContained          运行时一并打包，目标机无需安装 .NET 8 桌面运行时
+      PublishSingleFile      合成单个 exe，配置文件仍留在外面（就是要让现场能改）
+      IncludeNativeLibraries 把 WPF / System.IO.Ports 的原生 DLL 也塞进 exe，否则会散落一堆
+      PublishTrimmed=false   必须关闭：WPF 的 XAML 解析、OxyPlot、配置绑定都走反射，
+                             裁剪会在运行时才炸，且往往只在某个具体界面才触发
+      ReadyToRun             预编译，冷启动更快，代价是体积增大
+  -->
+  <PropertyGroup Condition="'$(_IsPublishing)' == 'true' or '$(PublishSingleFile)' == 'true'">
+    <SelfContained>true</SelfContained>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <PublishTrimmed>false</PublishTrimmed>
+    <PublishReadyToRun>true</PublishReadyToRun>
+    <DebugType>none</DebugType>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
   </PropertyGroup>
 
   <ItemGroup>
@@ -31,6 +61,13 @@
 
     <!-- Serial Port -->
     <PackageReference Include="System.IO.Ports" Version="8.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- 配置文件随 exe 一起输出，现场改端口/融合权重无需重新编译 -->
+    <None Update="appsettings.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
   </ItemGroup>
 
 </Project>
